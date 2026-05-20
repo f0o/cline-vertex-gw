@@ -1,0 +1,29 @@
+# Compiled binary (was previously committed at repo root)
+/cline-vertex-gw
+/cline-vertex-gw.exe
+
+# Build artifacts
+/dist/
+/build/
+/bin/
+
+# Go test/coverage output
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Editor / OS noise
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Local environment
+.env
+.env.local
+
+# Module downloads are cached by CI and Docker layer caching; no need to
+# vendor. The go.sum file provides integrity verification.
+/vendor/
