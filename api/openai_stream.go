@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,7 +48,7 @@ func (h *APIHandler) openaiChatNonStream(
 	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if part.FunctionCall != nil {
-				toolCalls = append(toolCalls, oaiToolCallFromGenai(part.FunctionCall))
+				toolCalls = append(toolCalls, oaiToolCallFromGenai(part))
 				continue
 			}
 			fullContent.WriteString(part.Text)
@@ -203,16 +204,20 @@ func (h *APIHandler) openaiChatStream(
 	// emitToolCallDelta sends a single tool_calls delta chunk carrying one
 	// fully-assembled tool call. Per OpenAI's wire spec, each call has a
 	// unique index, a stable id, and the arguments are a JSON-encoded string.
-	emitToolCallDelta := func(fc *genai.FunctionCall) error {
+	emitToolCallDelta := func(part *genai.Part) error {
 		if !emittedAny {
 			if err := emitFirstDelta(); err != nil {
 				return err
 			}
 		}
+		fc := part.FunctionCall
 		argsJSON, _ := provider.MarshalToolArgs(fc.Args)
 		id := fc.ID
 		if id == "" {
 			id = newToolCallID()
+		}
+		if len(part.ThoughtSignature) > 0 {
+			id = id + "|" + base64.URLEncoding.EncodeToString(part.ThoughtSignature)
 		}
 		tcd := OAIStreamToolCallDelta{
 			Index: toolCallIndex,
@@ -243,8 +248,8 @@ func (h *APIHandler) openaiChatStream(
 	}
 
 	onDelta := func(d StreamDelta) error {
-		if d.FunctionCall != nil {
-			return emitToolCallDelta(d.FunctionCall)
+		if d.Part != nil && d.Part.FunctionCall != nil {
+			return emitToolCallDelta(d.Part)
 		}
 		if d.Text != "" {
 			return emitTextDelta(d.Text)

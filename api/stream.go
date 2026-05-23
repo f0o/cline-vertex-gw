@@ -19,8 +19,8 @@ import "google.golang.org/genai"
 // FunctionCall deltas and only forward Text fragments — losing visibility
 // into the model's tool-call decisions but never crashing.
 type StreamDelta struct {
-	Text         string
-	FunctionCall *genai.FunctionCall
+	Text string
+	Part *genai.Part
 }
 
 // streamCallback is invoked for each delta produced by the streaming

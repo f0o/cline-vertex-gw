@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 
@@ -24,13 +25,17 @@ func newToolCallID() string {
 // toolCallFromGenai converts a model-emitted genai.FunctionCall into the
 // Ollama-shape ToolCall used on /api/chat. Synthesizes an id if upstream
 // didn't supply one.
-func toolCallFromGenai(fc *genai.FunctionCall) ToolCall {
-	if fc == nil {
+func toolCallFromGenai(part *genai.Part) ToolCall {
+	if part == nil || part.FunctionCall == nil {
 		return ToolCall{}
 	}
+	fc := part.FunctionCall
 	id := fc.ID
 	if id == "" {
 		id = newToolCallID()
+	}
+	if len(part.ThoughtSignature) > 0 {
+		id = id + "|" + base64.URLEncoding.EncodeToString(part.ThoughtSignature)
 	}
 	return ToolCall{
 		ID: id,
@@ -44,10 +49,11 @@ func toolCallFromGenai(fc *genai.FunctionCall) ToolCall {
 // oaiToolCallFromGenai converts a model-emitted genai.FunctionCall into the
 // OpenAI-shape OAIToolCall used on /v1/chat/completions. Per OpenAI spec the
 // arguments field is a JSON-encoded STRING.
-func oaiToolCallFromGenai(fc *genai.FunctionCall) OAIToolCall {
-	if fc == nil {
+func oaiToolCallFromGenai(part *genai.Part) OAIToolCall {
+	if part == nil || part.FunctionCall == nil {
 		return OAIToolCall{}
 	}
+	fc := part.FunctionCall
 	args, _ := provider.MarshalToolArgs(fc.Args)
 	out := OAIToolCall{
 		ID:   fc.ID,
@@ -55,6 +61,9 @@ func oaiToolCallFromGenai(fc *genai.FunctionCall) OAIToolCall {
 	}
 	if out.ID == "" {
 		out.ID = newToolCallID()
+	}
+	if len(part.ThoughtSignature) > 0 {
+		out.ID = out.ID + "|" + base64.URLEncoding.EncodeToString(part.ThoughtSignature)
 	}
 	out.Function.Name = fc.Name
 	out.Function.Arguments = args
@@ -164,9 +173,18 @@ func translateOllamaToolsToGenai(tools []ToolDef) []*genai.Tool {
 // its wire-format string; malformed JSON yields Args=nil with no error.
 func oaiToolCallToGenaiPart(tc OAIToolCall) *genai.Part {
 	args, _ := provider.UnmarshalToolArgs(tc.Function.Arguments)
+	id := tc.ID
+	var thoughtSig []byte
+	if idx := strings.Index(id, "|"); idx != -1 {
+		if b, err := base64.URLEncoding.DecodeString(id[idx+1:]); err == nil {
+			thoughtSig = b
+		}
+		id = id[:idx]
+	}
 	return &genai.Part{
+		ThoughtSignature: thoughtSig,
 		FunctionCall: &genai.FunctionCall{
-			ID:   tc.ID,
+			ID:   id,
 			Name: tc.Function.Name,
 			Args: args,
 		},
@@ -176,9 +194,18 @@ func oaiToolCallToGenaiPart(tc OAIToolCall) *genai.Part {
 // ollamaToolCallToGenaiPart is the Ollama-shape counterpart. Arguments is
 // already a map (Ollama doesn't stringify it).
 func ollamaToolCallToGenaiPart(tc ToolCall) *genai.Part {
+	id := tc.ID
+	var thoughtSig []byte
+	if idx := strings.Index(id, "|"); idx != -1 {
+		if b, err := base64.URLEncoding.DecodeString(id[idx+1:]); err == nil {
+			thoughtSig = b
+		}
+		id = id[:idx]
+	}
 	return &genai.Part{
+		ThoughtSignature: thoughtSig,
 		FunctionCall: &genai.FunctionCall{
-			ID:   tc.ID,
+			ID:   id,
 			Name: tc.Function.Name,
 			Args: tc.Function.Arguments,
 		},
@@ -197,6 +224,9 @@ func ollamaToolCallToGenaiPart(tc ToolCall) *genai.Part {
 func toolResultPart(toolCallID, name, resultText string) *genai.Part {
 	if name == "" {
 		name = "tool"
+	}
+	if idx := strings.Index(toolCallID, "|"); idx != -1 {
+		toolCallID = toolCallID[:idx]
 	}
 	var resp map[string]any
 	trimmed := strings.TrimSpace(resultText)

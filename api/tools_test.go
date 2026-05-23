@@ -139,7 +139,8 @@ func TestOAIToolCallFromGenai(t *testing.T) {
 		Name: "read_file",
 		Args: map[string]any{"path": "main.go"},
 	}
-	out := oaiToolCallFromGenai(fc)
+	part := &genai.Part{FunctionCall: fc}
+	out := oaiToolCallFromGenai(part)
 	if out.Function.Name != "read_file" {
 		t.Errorf("Name = %q", out.Function.Name)
 	}
@@ -155,7 +156,7 @@ func TestOAIToolCallFromGenai(t *testing.T) {
 
 	// When upstream supplies an ID it must be preserved.
 	fc.ID = "toolu_xyz"
-	out = oaiToolCallFromGenai(fc)
+	out = oaiToolCallFromGenai(part)
 	if out.ID != "toolu_xyz" {
 		t.Errorf("ID = %q; want toolu_xyz preserved", out.ID)
 	}
@@ -168,7 +169,8 @@ func TestToolCallFromGenai_OllamaShape(t *testing.T) {
 		Name: "list_files",
 		Args: map[string]any{"dir": "/tmp"},
 	}
-	out := toolCallFromGenai(fc)
+	part := &genai.Part{FunctionCall: fc}
+	out := toolCallFromGenai(part)
 	if out.Function.Name != "list_files" {
 		t.Errorf("Name = %q", out.Function.Name)
 	}

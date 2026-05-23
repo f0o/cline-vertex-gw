@@ -227,7 +227,7 @@ func (h *APIHandler) runStreamWithRetry(
 						// content_block_stop; Cohere emits on
 						// tool-calls-generation). Forward as-is.
 						if part.FunctionCall != nil {
-							if cberr := onChunk(StreamDelta{FunctionCall: part.FunctionCall}); cberr != nil {
+							if cberr := onChunk(StreamDelta{Part: part}); cberr != nil {
 								cancel()
 								metrics.end = time.Now()
 								return metrics, cberr
@@ -552,9 +552,9 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		// most clients don't speak. So we buffer them and emit on Done.
 		var collectedToolCalls []ToolCall
 		onChunk := func(d StreamDelta) error {
-			if d.FunctionCall != nil {
+			if d.Part != nil && d.Part.FunctionCall != nil {
 				collectedToolCalls = append(collectedToolCalls,
-					toolCallFromGenai(d.FunctionCall))
+					toolCallFromGenai(d.Part))
 				return nil
 			}
 			if d.Text == "" {
@@ -620,7 +620,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if part.FunctionCall != nil {
 				nonStreamToolCalls = append(nonStreamToolCalls,
-					toolCallFromGenai(part.FunctionCall))
+					toolCallFromGenai(part))
 				continue
 			}
 			fullContent.WriteString(part.Text)
@@ -709,7 +709,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		// — clients that want tool calling against this gateway should use
 		// /api/chat or /v1/chat/completions instead.
 		onChunk := func(d StreamDelta) error {
-			if d.FunctionCall != nil {
+			if d.Part != nil && d.Part.FunctionCall != nil {
 				return nil
 			}
 			if d.Text == "" {
