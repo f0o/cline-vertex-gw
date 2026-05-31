@@ -24,7 +24,7 @@ ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}
 RUN go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
-    -o /out/cline-vertex-gw .
+    -o /out/cline-vertex-gw ./cmd/cline-vertex-gw
 
 # ---- runtime stage --------------------------------------------------------
 # distroless/static is ~2 MB, has no shell, no package manager, no libc, and

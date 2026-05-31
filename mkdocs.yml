@@ -1,0 +1,52 @@
+site_name: cline-vertex-gw
+site_url: https://f0o.github.io/cline-vertex-gw
+site_description: An Ollama-compatible and OpenAI-compatible HTTP gateway in front of Google Cloud Vertex AI.
+repo_name: f0o/cline-vertex-gw
+repo_url: https://github.com/f0o/cline-vertex-gw
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Quick Start: quickstart.md
+  - Configuration: configuration.md
+  - Features:
+      - Multimodal Support: features/multimodal.md
+      - Tool Calling: features/tool_calling.md
+      - Metrics & Cost Tracking: features/cost_metrics.md
+      - Token-Cost Optimization: features/optimization.md
+  - API Reference: api_reference.md
+  - Development Guide: development.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - tables

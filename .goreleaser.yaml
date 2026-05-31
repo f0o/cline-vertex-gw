@@ -22,6 +22,7 @@ builds:
     ignore:
       - goos: darwin
         goarch: "386"
+    main: ./cmd/cline-vertex-gw
     ldflags:
       - -s -w -X main.version={{.Version}}
     flags:

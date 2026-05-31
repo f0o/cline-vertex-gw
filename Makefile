@@ -6,7 +6,7 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
-PKGS     := ./api/... ./provider/... .
+PKGS     := ./pkg/... ./cmd/...
 
 .PHONY: help build run test race vet staticcheck vuln cover clean docker ci
 
@@ -24,7 +24,7 @@ help:
 	@echo "  ci           Run the full local-CI gauntlet (vet + race + staticcheck + vuln)"
 
 build:
-	go build -trimpath -ldflags '$(LDFLAGS)' -o cline-vertex-gw .
+	go build -trimpath -ldflags '$(LDFLAGS)' -o cline-vertex-gw ./cmd/cline-vertex-gw
 
 run: build
 	./cline-vertex-gw

@@ -84,7 +84,7 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
       - name: Run staticcheck
-        run: staticcheck ./api/... ./provider/... .
+        run: staticcheck ./pkg/... ./cmd/...
 
   binary-release:
     name: release binaries
