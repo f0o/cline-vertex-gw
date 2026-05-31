@@ -432,6 +432,7 @@ func cohereToolCallsToGenaiParts(calls []cohereResponseToolCall) []*genai.Part {
 // response into a *genai.GenerateContentResponse.
 func (vc *VertexClient) cohereGenerate(ctx context.Context, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) (*genai.GenerateContentResponse, error) {
 	body := buildCohereRequest(systemPrompt, contents, opts, false)
+	DebugLogPayload(ctx, "upstream_request", body)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("cohere: marshal body: %w", err)
@@ -462,6 +463,7 @@ func (vc *VertexClient) cohereGenerate(ctx context.Context, modelID, systemPromp
 	if err := json.NewDecoder(resp.Body).Decode(&cresp); err != nil {
 		return nil, fmt.Errorf("cohere: decode: %w", err)
 	}
+	DebugLogPayload(ctx, "upstream_response", cresp)
 
 	// Build the candidate Parts: text first (if any), then tool calls. If
 	// the model emitted tool calls we upgrade the finish reason regardless
@@ -504,6 +506,7 @@ func (vc *VertexClient) cohereGenerate(ctx context.Context, modelID, systemPromp
 func (vc *VertexClient) cohereGenerateStream(ctx context.Context, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) iter.Seq2[*genai.GenerateContentResponse, error] {
 	return func(yield func(*genai.GenerateContentResponse, error) bool) {
 		body := buildCohereRequest(systemPrompt, contents, opts, true)
+		DebugLogPayload(ctx, "upstream_request", body)
 		payload, err := json.Marshal(body)
 		if err != nil {
 			yield(nil, fmt.Errorf("cohere: marshal body: %w", err))
@@ -564,6 +567,7 @@ func (vc *VertexClient) cohereGenerateStream(ctx context.Context, modelID, syste
 			if data == "" || data == "[DONE]" {
 				continue
 			}
+			DebugLogPayload(ctx, "upstream_response_chunk", json.RawMessage(data))
 
 			var ev cohereStreamEvent
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {

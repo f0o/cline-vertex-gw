@@ -41,10 +41,10 @@ func TestDedup_BasicRepeat(t *testing.T) {
 	defer withDedup(t, true, 100)()
 	big := strings.Repeat("A", 2000)
 	in := []*genai.Content{
-		mkTurn(genai.RoleUser, big),           // turn 1 - kept verbatim
-		mkTurn(genai.RoleModel, "ack"),        // turn 2
+		mkTurn(genai.RoleUser, big),              // turn 1 - kept verbatim
+		mkTurn(genai.RoleModel, "ack"),           // turn 2
 		mkTurn(genai.RoleUser, "now this: "+big), // turn 3 - DIFFERENT (prefix added)
-		mkTurn(genai.RoleUser, big),           // turn 4 - DUPLICATE of turn 1
+		mkTurn(genai.RoleUser, big),              // turn 4 - DUPLICATE of turn 1
 	}
 	out := DedupReplayedBlocks(in)
 	if out[0].Parts[0].Text != big {

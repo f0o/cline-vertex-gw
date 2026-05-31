@@ -46,6 +46,37 @@ type labeledValue struct {
 	value  float64
 }
 
+// floatCounterVec is a label→float64 monotonic counter. Used for the estimated
+// cost metric where values are fractional USD (uint64 cents would lose
+// sub-cent precision over many small requests). Same bounded-cardinality
+// guarantees as counterVec (labels come from a fixed publisher/model set).
+type floatCounterVec struct {
+	mu     sync.RWMutex
+	values map[string]float64
+}
+
+func newFloatCounterVec() *floatCounterVec { return &floatCounterVec{values: make(map[string]float64)} }
+
+func (c *floatCounterVec) Add(labelKey string, delta float64) {
+	if delta <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.values[labelKey] += delta
+	c.mu.Unlock()
+}
+
+func (c *floatCounterVec) snapshot() []labeledValue {
+	c.mu.RLock()
+	out := make([]labeledValue, 0, len(c.values))
+	for k, v := range c.values {
+		out = append(out, labeledValue{labels: k, value: v})
+	}
+	c.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].labels < out[j].labels })
+	return out
+}
+
 // histogram: fixed-bucket request-duration histogram. Buckets tuned for
 // typical Vertex AI latencies (TTFB 200ms-2s, full responses 1s-120s).
 type histogram struct {
@@ -91,6 +122,7 @@ type metricsRegistry struct {
 	tagsCacheMisses       uint64
 	panicsRecovered       uint64
 	compressionBytesSaved *counterVec
+	estimatedCost         *floatCounterVec
 }
 
 var metrics = &metricsRegistry{
@@ -99,6 +131,7 @@ var metrics = &metricsRegistry{
 	tokens:                newCounterVec(),
 	retries:               newCounterVec(),
 	compressionBytesSaved: newCounterVec(),
+	estimatedCost:         newFloatCounterVec(),
 }
 
 // --- public update API ----------------------------------------------------
@@ -129,6 +162,14 @@ func MetricsCompressionBytesSaved(stage string, bytes int) {
 		return
 	}
 	metrics.compressionBytesSaved.Add(fmt.Sprintf(`stage=%q`, stage), uint64(bytes))
+}
+
+// MetricsEstimatedCost accumulates the estimated USD cost for a request by
+// model and kind (input|cached|output). Prices are scraped live from the
+// Cloud Billing Catalog API; see provider/pricing.go. Non-positive amounts are
+// ignored (the floatCounterVec drops them).
+func MetricsEstimatedCost(kind, model string, usd float64) {
+	metrics.estimatedCost.Add(fmt.Sprintf(`kind=%q,model=%q`, kind, model), usd)
 }
 
 // --- exposition -----------------------------------------------------------
@@ -196,7 +237,15 @@ func exposition() string {
 		fmt.Fprintf(&b, "cline_vertex_gw_compression_bytes_saved_total{%s} %g\n", lv.labels, lv.value)
 	}
 
+	writeHeader(&b, "cline_vertex_gw_estimated_cost_usd_total",
+		"Cumulative estimated USD spend by kind (input|cached|output) and model id. "+
+			"Prices scraped live from the Cloud Billing Catalog API; estimates only.", "counter")
+	for _, lv := range metrics.estimatedCost.snapshot() {
+		fmt.Fprintf(&b, "cline_vertex_gw_estimated_cost_usd_total{%s} %g\n", lv.labels, lv.value)
+	}
+
 	return b.String()
+
 }
 
 func writeHeader(b *strings.Builder, name, help, typ string) {

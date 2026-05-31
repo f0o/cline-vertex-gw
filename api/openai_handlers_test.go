@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -230,18 +231,18 @@ func TestGenOptionsFromOAI_Stop(t *testing.T) {
 
 func TestFinishReasonOAI(t *testing.T) {
 	cases := map[string]string{
-		"":                          "stop",
-		"STOP":                      "stop",
-		"FINISH_REASON_STOP":        "stop",
-		"MAX_TOKENS":                "length",
-		"FINISH_REASON_MAX_TOKENS":  "length",
-		"SAFETY":                    "content_filter",
-		"FINISH_REASON_SAFETY":      "content_filter",
-		"RECITATION":                "content_filter",
-		"FINISH_REASON_RECITATION":  "content_filter",
-		"TOOL_USE":                  "tool_calls",
-		"TOOL_CALLS":                "tool_calls",
-		"some-other-thing":          "stop",
+		"":                         "stop",
+		"STOP":                     "stop",
+		"FINISH_REASON_STOP":       "stop",
+		"MAX_TOKENS":               "length",
+		"FINISH_REASON_MAX_TOKENS": "length",
+		"SAFETY":                   "content_filter",
+		"FINISH_REASON_SAFETY":     "content_filter",
+		"RECITATION":               "content_filter",
+		"FINISH_REASON_RECITATION": "content_filter",
+		"TOOL_USE":                 "tool_calls",
+		"TOOL_CALLS":               "tool_calls",
+		"some-other-thing":         "stop",
 	}
 	for in, want := range cases {
 		if got := finishReasonOAI(in); got != want {
@@ -367,16 +368,16 @@ func TestAuthMiddleware_V1PathCorrectToken(t *testing.T) {
 
 func TestIsProtectedPath(t *testing.T) {
 	cases := map[string]bool{
-		"/":                       false,
-		"/api/tags":               true,
-		"/api/chat":               true,
-		"/api/anything":           true,
-		"/v1/models":              true,
-		"/v1/chat/completions":    true,
-		"/v1":                     false, // no trailing slash
-		"/api":                    false, // no trailing slash
-		"/healthz":                false,
-		"/v1foo":                  false, // not "/v1/"
+		"/":                    false,
+		"/api/tags":            true,
+		"/api/chat":            true,
+		"/api/anything":        true,
+		"/v1/models":           true,
+		"/v1/chat/completions": true,
+		"/v1":                  false, // no trailing slash
+		"/api":                 false, // no trailing slash
+		"/healthz":             false,
+		"/v1foo":               false, // not "/v1/"
 	}
 	for p, want := range cases {
 		if got := isProtectedPath(p); got != want {
@@ -387,7 +388,7 @@ func TestIsProtectedPath(t *testing.T) {
 
 func TestWriteSSEData_Framing(t *testing.T) {
 	rec := httptest.NewRecorder()
-	if err := writeSSEData(rec, map[string]any{"k": "v"}); err != nil {
+	if err := writeSSEData(context.Background(), rec, map[string]any{"k": "v"}); err != nil {
 		t.Fatalf("writeSSEData: %v", err)
 	}
 	body := rec.Body.String()

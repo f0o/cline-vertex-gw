@@ -245,4 +245,3 @@ func toolResultPart(toolCallID, name, resultText string) *genai.Part {
 		Response: map[string]any{"output": resultText},
 	}}
 }
-

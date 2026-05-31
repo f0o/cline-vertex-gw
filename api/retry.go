@@ -65,6 +65,7 @@ func isRetryableError(err error) bool {
 		"500", "502", "503", "504",
 		"quota",
 		"exhaust",
+		"overloaded",
 		"unavailable",
 		"connection reset",
 		"connection refused",
@@ -98,6 +99,8 @@ func classifyError(err error) string {
 	switch {
 	case strings.Contains(s, "429"), strings.Contains(s, "quota"), strings.Contains(s, "exhaust"):
 		return "rate-limited"
+	case strings.Contains(s, "overloaded"):
+		return "overloaded"
 	case strings.Contains(s, "503"), strings.Contains(s, "unavailable"):
 		return "unavailable"
 	case strings.Contains(s, "500"), strings.Contains(s, "internal"):
@@ -136,8 +139,8 @@ func newReqLogger(route string) *reqLogger {
 	return &reqLogger{id: newReqID(), route: route, start: time.Now()}
 }
 
-func (rl *reqLogger) Logf(format string, args ...interface{}) {
-	log.Printf("[%s req=%s] "+format, append([]interface{}{rl.route, rl.id}, args...)...)
+func (rl *reqLogger) Logf(format string, args ...any) {
+	log.Printf("[%s req=%s] "+format, append([]any{rl.route, rl.id}, args...)...)
 }
 
 func (rl *reqLogger) Elapsed() time.Duration {

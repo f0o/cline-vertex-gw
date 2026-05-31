@@ -90,9 +90,9 @@ func (m mediaPart) isText() bool { return m.MIME == "" }
 // oaiContentPart mirrors the OpenAI content-parts wire shape for both
 // decoding and re-emission tests. Polymorphic via the Type discriminator.
 type oaiContentPart struct {
-	Type     string         `json:"type"`
-	Text     string         `json:"text,omitempty"`
-	ImageURL *oaiImageURL   `json:"image_url,omitempty"`
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL *oaiImageURL `json:"image_url,omitempty"`
 }
 
 // oaiImageURL is the nested object on an image_url part. We only consume

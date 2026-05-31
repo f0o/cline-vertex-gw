@@ -20,8 +20,25 @@ func resetMetricsForTest(t *testing.T) {
 		tokens:                newCounterVec(),
 		retries:               newCounterVec(),
 		compressionBytesSaved: newCounterVec(),
+		estimatedCost:         newFloatCounterVec(),
 	}
 	t.Cleanup(func() { metrics = prev })
+}
+
+func TestMetricsEstimatedCost(t *testing.T) {
+	resetMetricsForTest(t)
+
+	MetricsEstimatedCost("input", "gemini-2.5-pro", 1.0)
+	MetricsEstimatedCost("input", "gemini-2.5-pro", 0.5) // accumulates → 1.5
+	MetricsEstimatedCost("cached", "gemini-2.5-pro", 0.062)
+	MetricsEstimatedCost("output", "gemini-2.5-pro", 5.0)
+	MetricsEstimatedCost("output", "gemini-2.5-pro", 0) // ignored (non-positive)
+
+	body := exposition()
+	mustContain(t, body, `# TYPE cline_vertex_gw_estimated_cost_usd_total counter`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="input",model="gemini-2.5-pro"} 1.5`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="cached",model="gemini-2.5-pro"} 0.062`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="output",model="gemini-2.5-pro"} 5`)
 }
 
 func TestMetricsHandlerEmpty(t *testing.T) {
@@ -86,9 +103,9 @@ func TestMetricsHistogramBuckets(t *testing.T) {
 	resetMetricsForTest(t)
 
 	// Three observations spanning multiple buckets.
-	MetricsRequest("chat", "stop", 0.04)  // ≤0.05
-	MetricsRequest("chat", "stop", 0.40)  // ≤0.5
-	MetricsRequest("chat", "stop", 75.0)  // ≤120
+	MetricsRequest("chat", "stop", 0.04) // ≤0.05
+	MetricsRequest("chat", "stop", 0.40) // ≤0.5
+	MetricsRequest("chat", "stop", 75.0) // ≤120
 	body := exposition()
 
 	// le="0.05" should be 1 (the 0.04 obs only).

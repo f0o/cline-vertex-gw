@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -263,9 +264,7 @@ func finishReasonOAI(vertexReason string) string {
 // writeOAIError emits an OpenAI-style error envelope. Safe to call only
 // before any bytes have been streamed.
 func writeOAIError(w http.ResponseWriter, status int, errType, msg, code string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(OAIErrorResponse{
+	writeJSON(w, status, OAIErrorResponse{
 		Error: OAIErrorBody{
 			Message: msg,
 			Type:    errType,
@@ -281,6 +280,11 @@ func writeOAIError(w http.ResponseWriter, status int, errType, msg, code string)
 // the `stream` field in the request body.
 func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	rl := newReqLogger("v1-chat")
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, provider.ContextKeyReqID, rl.id)
+	ctx = context.WithValue(ctx, provider.ContextKeyRoute, rl.route)
+	r = r.WithContext(ctx)
+
 	if r.Method != http.MethodPost {
 		writeOAIError(w, http.StatusMethodNotAllowed, "method_not_allowed",
 			"Only POST is allowed on this endpoint", "")
@@ -316,6 +320,8 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 			fmt.Sprintf("Error parsing JSON body: %v", err), "")
 		return
 	}
+
+	provider.DebugLogPayload(ctx, "inbound_request", req)
 
 	if strings.TrimSpace(req.Model) == "" {
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error",
@@ -356,7 +362,7 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	genOpts := genOptionsFromOAI(&req)
-	ctx := r.Context()
+	ctx = r.Context()
 
 	completionID := newCompletionID()
 	created := time.Now().Unix()
@@ -367,4 +373,3 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 	}
 	h.openaiChatNonStream(ctx, w, rl, &req, completionID, created, systemPrompt, contents, genOpts)
 }
-

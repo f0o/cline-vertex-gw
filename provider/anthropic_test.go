@@ -11,29 +11,29 @@ import (
 func TestIsAnthropicReasoningModel(t *testing.T) {
 	cases := map[string]bool{
 		// Reasoning / extended-thinking family — sampling params rejected.
-		"claude-opus-4":          true,
-		"claude-opus-4-7":        true,
-		"claude-opus-4-1":        true,
-		"claude-opus-4@20251015": true,
-		"claude-sonnet-4":        true,
-		"claude-sonnet-4-5":      true,
-		"claude-opus-4-thinking": true,
+		"claude-opus-4":              true,
+		"claude-opus-4-7":            true,
+		"claude-opus-4-1":            true,
+		"claude-opus-4@20251015":     true,
+		"claude-sonnet-4":            true,
+		"claude-sonnet-4-5":          true,
+		"claude-opus-4-thinking":     true,
 		"claude-3-7-sonnet-thinking": true,
 
 		// Non-reasoning classics — must keep sampling params.
-		"claude-3-5-sonnet":         false,
-		"claude-3-5-sonnet-v2":      false,
-		"claude-3-5-haiku":          false,
-		"claude-3-opus":             false,
-		"claude-3-haiku":            false,
-		"claude-3-sonnet":           false,
-		"claude-3-5-sonnet@latest":  false,
-		"claude-instant-1.2":        false,
+		"claude-3-5-sonnet":        false,
+		"claude-3-5-sonnet-v2":     false,
+		"claude-3-5-haiku":         false,
+		"claude-3-opus":            false,
+		"claude-3-haiku":           false,
+		"claude-3-sonnet":          false,
+		"claude-3-5-sonnet@latest": false,
+		"claude-instant-1.2":       false,
 
 		// Edge cases — defensive.
-		"":                  false,
-		"gemini-2.0-flash":  false,
-		"llama-3.3-70b":     false,
+		"":                 false,
+		"gemini-2.0-flash": false,
+		"llama-3.3-70b":    false,
 	}
 	for in, want := range cases {
 		if got := isAnthropicReasoningModel(in); got != want {
@@ -158,15 +158,19 @@ func bigStr(n int) string {
 
 // TestBuildAnthropicRequest_PromptCacheTagsLargeSystem verifies that a system
 // prompt above the caching threshold is emitted as a single content block
-// carrying `cache_control: {"type":"ephemeral"}`. This is the highest-ROI
-// optimization for Cline (huge stable system prompt on every turn).
+// carrying `cache_control: {"type":"ephemeral"}` WHEN the conversation is
+// multi-turn (so a later request can read the cache back). This is the
+// highest-ROI optimization for Cline (huge stable system prompt on every turn).
 // Caching is always-on for supported models; no env knob to toggle.
 func TestBuildAnthropicRequest_PromptCacheTagsLargeSystem(t *testing.T) {
 	bigSys := bigStr(5000) // > 4000-byte threshold
-	contents := []*genai.Content{{
-		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: "hi"}},
-	}}
+	// Multi-turn: a follow-up turn exists so the cached system prefix WILL be
+	// read back on a subsequent request — caching is net-positive here.
+	contents := []*genai.Content{
+		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}}},
+		{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "ack"}}},
+		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "follow-up"}}},
+	}
 	req := buildAnthropicRequest("claude-3-5-sonnet", bigSys, contents, nil, true)
 
 	if req.System == nil {
@@ -181,6 +185,76 @@ func TestBuildAnthropicRequest_PromptCacheTagsLargeSystem(t *testing.T) {
 	}
 	if b.CacheControl == nil || b.CacheControl.Type != "ephemeral" {
 		t.Errorf("System cache_control = %+v; want {ephemeral}", b.CacheControl)
+	}
+}
+
+// TestBuildAnthropicRequest_PromptCacheSkipsLargeSystemSingleTurn verifies the
+// core economic fix: a one-shot call (single user turn, no follow-up) does NOT
+// cache even a large system prompt, because there is no later request position
+// to read the cache back — the 25% write premium would be pure loss.
+func TestBuildAnthropicRequest_PromptCacheSkipsLargeSystemSingleTurn(t *testing.T) {
+	bigSys := bigStr(5000) // > 4000-byte threshold, but single-turn
+	contents := []*genai.Content{{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: "hi"}},
+	}}
+	req := buildAnthropicRequest("claude-3-5-sonnet", bigSys, contents, nil, true)
+
+	if req.System == nil {
+		t.Fatal("System = nil; want plain-text system block")
+	}
+	if len(req.System.Blocks) != 0 {
+		t.Errorf("System.Blocks len = %d; want 0 (plain-text, uncached) for single-turn", len(req.System.Blocks))
+	}
+	if req.System.Text != bigSys {
+		t.Errorf("System.Text mismatch; want full plain-text system prompt")
+	}
+}
+
+// TestBuildAnthropicRequest_PromptCacheTailBreakpoint verifies that a long
+// session gets a rolling tail cache breakpoint on the second-to-last turn (so
+// the growing history is cached for the next request), in addition to the head
+// breakpoints. Total breakpoints must stay within Anthropic's limit of 4.
+func TestBuildAnthropicRequest_PromptCacheTailBreakpoint(t *testing.T) {
+	bigSys := bigStr(5000)
+	var contents []*genai.Content
+	for i := 0; i < 8; i++ {
+		if i%2 == 0 {
+			contents = append(contents, &genai.Content{
+				Role: genai.RoleUser, Parts: []*genai.Part{{Text: bigStr(3000)}}})
+		} else {
+			contents = append(contents, &genai.Content{
+				Role: genai.RoleModel, Parts: []*genai.Part{{Text: bigStr(3000)}}})
+		}
+	}
+	req := buildAnthropicRequest("claude-3-5-sonnet", bigSys, contents, nil, true)
+
+	if len(req.Messages) != 8 {
+		t.Fatalf("Messages len = %d; want 8", len(req.Messages))
+	}
+	// The second-to-last turn (index 6) should carry a cache_control marker.
+	tail := req.Messages[6]
+	if len(tail.Blocks) == 0 || tail.Blocks[len(tail.Blocks)-1].CacheControl == nil {
+		t.Errorf("Messages[6] (tail anchor) = %+v; want a cache_control marker", tail)
+	}
+	// Count total cache_control markers across system + messages; must be ≤ 4.
+	markers := 0
+	if req.System != nil {
+		for _, b := range req.System.Blocks {
+			if b.CacheControl != nil {
+				markers++
+			}
+		}
+	}
+	for _, m := range req.Messages {
+		for _, b := range m.Blocks {
+			if b.CacheControl != nil {
+				markers++
+			}
+		}
+	}
+	if markers > 4 {
+		t.Errorf("total cache_control markers = %d; want ≤ 4", markers)
 	}
 }
 
@@ -335,4 +409,3 @@ func TestAnthropicSystem_MarshalJSON_Polymorphic(t *testing.T) {
 		}
 	})
 }
-

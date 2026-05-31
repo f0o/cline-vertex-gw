@@ -2,8 +2,6 @@ package provider
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -49,15 +47,7 @@ var tagsCache = &tagsCacheState{}
 // via t.Setenv. A 0-or-negative value disables caching entirely (every call
 // falls through to the live ListModels implementation).
 func tagsCacheTTL() time.Duration {
-	v, ok := os.LookupEnv(envTagsCacheTTL)
-	if !ok {
-		return defaultTagsTTL
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return defaultTagsTTL
-	}
-	return time.Duration(n) * time.Second
+	return envDurationSeconds(envTagsCacheTTL, defaultTagsTTL)
 }
 
 // cacheHitCallback / cacheMissCallback are wired by the api package via the

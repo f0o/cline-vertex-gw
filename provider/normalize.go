@@ -1,8 +1,6 @@
 package provider
 
 import (
-	"log"
-	"os"
 	"strings"
 
 	"google.golang.org/genai"
@@ -15,10 +13,10 @@ import (
 //
 //   - GW_NORMALIZE_WHITESPACE (default: on)
 //     When enabled (or unset), each text part is rewritten in place:
-//       * CRLF and CR are converted to LF
-//       * leading BOMs (U+FEFF) are stripped
-//       * trailing whitespace on each line is removed
-//       * runs of 3+ blank lines are collapsed to 2
+//   - CRLF and CR are converted to LF
+//   - leading BOMs (U+FEFF) are stripped
+//   - trailing whitespace on each line is removed
+//   - runs of 3+ blank lines are collapsed to 2
 //     The transform is lossless for code (leading whitespace, which carries
 //     indentation, is preserved) and prose (sentence content is untouched).
 //     The system prompt is normalized too because it dominates byte counts
@@ -26,25 +24,6 @@ import (
 //
 // Set to any of {0,false,off,no} to disable.
 var normalizeWhitespace = envBool("GW_NORMALIZE_WHITESPACE", true)
-
-// envBool parses a boolean env var. Returns def when unset. Accepts
-// 1/true/yes/on and 0/false/no/off (case-insensitive). Garbage values log a
-// warning and return the default — a typo shouldn't silently flip behavior.
-func envBool(name string, def bool) bool {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return def
-	}
-	switch strings.ToLower(v) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		log.Printf("invalid %s=%q (want bool); using default %v", name, v, def)
-		return def
-	}
-}
 
 // NormalizeWhitespace returns a new slice of *genai.Content where each Part's
 // Text has been normalized. Original Contents/Parts are NOT mutated — the

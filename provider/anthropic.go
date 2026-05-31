@@ -109,8 +109,8 @@ type anthropicMessage struct {
 // `"content": [{...}, ...]` (when Blocks is populated).
 func (m anthropicMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role    string      `json:"role"`
-		Content interface{} `json:"content"`
+		Role    string `json:"role"`
+		Content any    `json:"content"`
 	}
 	w := wire{Role: m.Role}
 	if len(m.Blocks) > 0 {
@@ -460,11 +460,19 @@ func buildAnthropicRequest(modelID, systemPrompt string, contents []*genai.Conte
 
 	sys := strings.TrimSpace(systemPrompt)
 
-	// ~3.5 chars/token on English prose => ~4000 chars ≈ 1100 tokens, above
-	// the 1024-token minimum for Sonnet/Opus.
-	const minCacheableBytes = 4000
-	cacheableSystem := len(sys) >= minCacheableBytes
-	if cacheableSystem {
+	// Prompt-cache breakpoints are decided by the shared, provider-agnostic
+	// planner (PlanCache) so the same write-vs-read economics apply across
+	// every publisher. The plan's anchors are expressed in merged-turn order,
+	// which is exactly the order of `raws` below — so anchor indices line up
+	// 1:1. PlanCache is called with the ORIGINAL contents (its mergedTurns
+	// helper performs the same same-role merging this function does), so the
+	// returned indices match.
+	//
+	// The cardinal rule (never cache a prefix with no later turn to read it
+	// back) is enforced inside PlanCache; here we simply honor its decisions.
+	plan := PlanCache(contents, sys, "anthropic")
+
+	if plan.CacheSystem {
 		req.System = &anthropicSystem{
 			Blocks: []anthropicBlock{{
 				Type:         "text",
@@ -476,46 +484,31 @@ func buildAnthropicRequest(modelID, systemPrompt string, contents []*genai.Conte
 		req.System = &anthropicSystem{Text: sys}
 	}
 
-	// Identify the first user turn so we can cache it.
-	firstUserIdx := -1
-	for i, m := range raws {
-		if m.role == "user" {
-			firstUserIdx = i
-			break
+	// tagTurn attaches a cache_control marker to the LAST block of a turn so
+	// the cached prefix encompasses every preceding block. Plain-text turns are
+	// promoted to a single-block form so they have somewhere to hang the marker.
+	tagTurn := func(msg *anthropicMessage, m rawMsg) {
+		if m.hasBlocks() {
+			msg.Blocks = m.blocks
+			msg.Blocks[len(msg.Blocks)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+			return
 		}
+		msg.Blocks = []anthropicBlock{{
+			Type:         "text",
+			Text:         m.text,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
 	}
-	// Only cache when substantial AND there are later turns to hit the cache.
-	firstUserSize := 0
-	if firstUserIdx >= 0 {
-		if raws[firstUserIdx].hasBlocks() {
-			for _, b := range raws[firstUserIdx].blocks {
-				firstUserSize += len(b.Text) + len(b.Input) + len(b.Content)
-			}
-		} else {
-			firstUserSize = len(raws[firstUserIdx].text)
-		}
-	}
-	cacheFirstUser := firstUserIdx >= 0 &&
-		len(raws) > firstUserIdx+1 &&
-		firstUserSize >= minCacheableBytes
 
 	for i, m := range raws {
 		var msg anthropicMessage
 		msg.Role = m.role
 		switch {
+		case i == plan.FirstUserTurnIdx || i == plan.TailTurnIdx:
+			// Cache breakpoint anchor (first-user head or rolling tail).
+			tagTurn(&msg, m)
 		case m.hasBlocks():
 			msg.Blocks = m.blocks
-			if cacheFirstUser && i == firstUserIdx {
-				// Attach cache_control to the LAST block in the user turn so
-				// the cached prefix encompasses every preceding block.
-				msg.Blocks[len(msg.Blocks)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
-			}
-		case cacheFirstUser && i == firstUserIdx:
-			msg.Blocks = []anthropicBlock{{
-				Type:         "text",
-				Text:         m.text,
-				CacheControl: &anthropicCacheControl{Type: "ephemeral"},
-			}}
 		default:
 			msg.Content = m.text
 		}
@@ -623,6 +616,7 @@ func anthropicResponseToGenaiParts(blocks []anthropicResponseBlock) []*genai.Par
 // adapts the response into a *genai.GenerateContentResponse.
 func (vc *VertexClient) anthropicGenerate(ctx context.Context, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) (*genai.GenerateContentResponse, error) {
 	body := buildAnthropicRequest(modelID, systemPrompt, contents, opts, false)
+	DebugLogPayload(ctx, "upstream_request", body)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal body: %w", err)
@@ -654,6 +648,7 @@ func (vc *VertexClient) anthropicGenerate(ctx context.Context, modelID, systemPr
 	if err := json.NewDecoder(resp.Body).Decode(&aresp); err != nil {
 		return nil, fmt.Errorf("anthropic: decode: %w", err)
 	}
+	DebugLogPayload(ctx, "upstream_response", aresp)
 
 	// Mirror cached-token accounting onto the genai shape. Cache-read tokens
 	// are folded into PromptTokenCount because Anthropic excludes them from
@@ -745,6 +740,7 @@ type inflightToolCall struct {
 func (vc *VertexClient) anthropicGenerateStream(ctx context.Context, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) iter.Seq2[*genai.GenerateContentResponse, error] {
 	return func(yield func(*genai.GenerateContentResponse, error) bool) {
 		body := buildAnthropicRequest(modelID, systemPrompt, contents, opts, true)
+		DebugLogPayload(ctx, "upstream_request", body)
 		payload, err := json.Marshal(body)
 		if err != nil {
 			yield(nil, fmt.Errorf("anthropic: marshal body: %w", err))
@@ -846,6 +842,7 @@ func (vc *VertexClient) anthropicGenerateStream(ctx context.Context, modelID, sy
 			if data == "" {
 				continue
 			}
+			DebugLogPayload(ctx, "upstream_response_chunk", map[string]string{"event": eventName, "data": data})
 
 			switch eventName {
 			case "message_start":

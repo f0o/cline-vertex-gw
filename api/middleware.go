@@ -3,7 +3,6 @@ package api
 import (
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"runtime/debug"
@@ -97,8 +96,9 @@ func extractBearer(h string) (string, error) {
 	}
 	const prefix = "Bearer "
 	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
-		return "", fmt.Errorf("malformed Authorization header")
+		return "", errors.New("malformed Authorization header")
 	}
+
 	token := strings.TrimSpace(h[len(prefix):])
 	if token == "" {
 		return "", errors.New("empty bearer token")

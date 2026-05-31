@@ -131,11 +131,11 @@ type OAIToolCall struct {
 // `ToolCallID` is populated on role:"tool" turns to link the result to the
 // originating call.
 type OAIChatMessage struct {
-	Role         string          `json:"role"`
-	Content      json.RawMessage `json:"content,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	ToolCalls    []OAIToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID   string          `json:"tool_call_id,omitempty"`
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	ToolCalls  []OAIToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 	// FunctionCall is the legacy pre-tools field accepted for decode
 	// compatibility with older clients but ignored downstream.
 	FunctionCall json.RawMessage `json:"function_call,omitempty"`

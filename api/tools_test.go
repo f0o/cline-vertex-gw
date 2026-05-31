@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -330,7 +331,7 @@ func TestOpenAIStream_ToolCallEmittedAsDelta(t *testing.T) {
 			FinishReason: nil,
 		}},
 	}
-	if err := writeSSEData(rec, chunk); err != nil {
+	if err := writeSSEData(context.Background(), rec, chunk); err != nil {
 		t.Fatalf("writeSSEData: %v", err)
 	}
 	body := rec.Body.String()
@@ -365,7 +366,7 @@ func TestOpenAIStream_FinalChunkFinishToolCalls(t *testing.T) {
 		}},
 		Usage: &OAIUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}
-	if err := writeSSEData(rec, chunk); err != nil {
+	if err := writeSSEData(context.Background(), rec, chunk); err != nil {
 		t.Fatalf("writeSSEData: %v", err)
 	}
 	body := rec.Body.String()
@@ -373,4 +374,3 @@ func TestOpenAIStream_FinalChunkFinishToolCalls(t *testing.T) {
 		t.Errorf("final chunk missing tool_calls finish reason: %s", body)
 	}
 }
-

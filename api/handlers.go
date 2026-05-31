@@ -476,6 +476,11 @@ func genOptionsFromAPI(o *Options, tools []ToolDef) *provider.GenerationOptions 
 
 func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	rl := newReqLogger("chat")
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, provider.ContextKeyReqID, rl.id)
+	ctx = context.WithValue(ctx, provider.ContextKeyRoute, rl.route)
+	r = r.WithContext(ctx)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -485,6 +490,9 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Vertex AI client not configured", http.StatusInternalServerError)
 		return
 	}
+	// Refresh the live pricing table in the background if its TTL has elapsed.
+	// Non-blocking: never adds latency to this request.
+	h.Vertex.MaybeRefreshPricing(ctx)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -501,11 +509,14 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req ChatRequest
+
 	if err := json.Unmarshal(body, &req); err != nil {
 		rl.Logf("parse body: %v", err)
 		http.Error(w, "Error parsing JSON body", http.StatusBadRequest)
 		return
 	}
+
+	provider.DebugLogPayload(ctx, "inbound_request", req)
 
 	isStream := true
 	if req.Stream != nil {
@@ -534,7 +545,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	genOpts := genOptionsFromAPI(req.Options, req.Tools)
-	ctx := r.Context()
+	ctx = r.Context()
 
 	if isStream {
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -551,6 +562,13 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		// per-chunk tool deltas would require a custom Ollama extension
 		// most clients don't speak. So we buffer them and emit on Done.
 		var collectedToolCalls []ToolCall
+
+		var unescaper *EntityUnescaper
+		pub, _ := provider.ParsePublisher(req.Model)
+		if pub == "google" {
+			unescaper = NewEntityUnescaper()
+		}
+
 		onChunk := func(d StreamDelta) error {
 			if d.Part != nil && d.Part.FunctionCall != nil {
 				collectedToolCalls = append(collectedToolCalls,
@@ -560,12 +578,21 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			if d.Text == "" {
 				return nil
 			}
-			err := enc.Encode(ChatResponse{
+			text := d.Text
+			if unescaper != nil {
+				text = unescaper.Process(text)
+			}
+			if text == "" {
+				return nil
+			}
+			chunk := ChatResponse{
 				Model:     req.Model,
 				CreatedAt: time.Now(),
-				Message:   Message{Role: "assistant", Content: d.Text},
+				Message:   Message{Role: "assistant", Content: text},
 				Done:      false,
-			})
+			}
+			provider.DebugLogPayload(ctx, "outbound_response_chunk", chunk)
+			err := enc.Encode(chunk)
 			if err != nil {
 				return err
 			}
@@ -583,6 +610,21 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if unescaper != nil {
+			leftover := unescaper.Flush()
+			if leftover != "" {
+				chunk := ChatResponse{
+					Model:     req.Model,
+					CreatedAt: time.Now(),
+					Message:   Message{Role: "assistant", Content: leftover},
+					Done:      false,
+				}
+				provider.DebugLogPayload(ctx, "outbound_response_chunk", chunk)
+				_ = enc.Encode(chunk)
+				flusher.Flush()
+			}
+		}
+
 		total, load, promptDur, evalDur := metrics.finalize()
 		done := ChatResponse{
 			Model:              req.Model,
@@ -597,6 +639,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			EvalCount:          metrics.completionTokens,
 			EvalDuration:       evalDur,
 		}
+		provider.DebugLogPayload(ctx, "outbound_response_chunk", done)
 		if err := enc.Encode(done); err != nil {
 			rl.Logf("encode done: %v", err)
 		}
@@ -626,11 +669,17 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			fullContent.WriteString(part.Text)
 		}
 	}
+	contentStr := fullContent.String()
+	pub, _ := provider.ParsePublisher(req.Model)
+	if pub == "google" {
+		unescaper := NewEntityUnescaper()
+		contentStr = unescaper.Process(contentStr) + unescaper.Flush()
+	}
 	total, load, promptDur, evalDur := metrics.finalize()
 	chatResp := ChatResponse{
 		Model:              req.Model,
 		CreatedAt:          time.Now(),
-		Message:            Message{Role: "assistant", Content: fullContent.String(), ToolCalls: nonStreamToolCalls},
+		Message:            Message{Role: "assistant", Content: contentStr, ToolCalls: nonStreamToolCalls},
 		Done:               true,
 		DoneReason:         doneReason(metrics.finishReason),
 		TotalDuration:      total,
@@ -640,6 +689,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		EvalCount:          metrics.completionTokens,
 		EvalDuration:       evalDur,
 	}
+	provider.DebugLogPayload(ctx, "outbound_response", chatResp)
 	if err := json.NewEncoder(w).Encode(chatResp); err != nil {
 		rl.Logf("encode response: %v", err)
 	}
@@ -648,6 +698,11 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 	rl := newReqLogger("generate")
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, provider.ContextKeyReqID, rl.id)
+	ctx = context.WithValue(ctx, provider.ContextKeyRoute, rl.route)
+	r = r.WithContext(ctx)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -679,6 +734,8 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	provider.DebugLogPayload(ctx, "inbound_request", req)
+
 	isStream := true
 	if req.Stream != nil {
 		isStream = *req.Stream
@@ -692,7 +749,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 	}}
 	// /api/generate has no tools field in real Ollama; pass nil.
 	genOpts := genOptionsFromAPI(req.Options, nil)
-	ctx := r.Context()
+	ctx = r.Context()
 
 	if isStream {
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -708,6 +765,12 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		// (unlike /api/chat). FunctionCall deltas are silently dropped here
 		// — clients that want tool calling against this gateway should use
 		// /api/chat or /v1/chat/completions instead.
+		var unescaper *EntityUnescaper
+		pub, _ := provider.ParsePublisher(req.Model)
+		if pub == "google" {
+			unescaper = NewEntityUnescaper()
+		}
+
 		onChunk := func(d StreamDelta) error {
 			if d.Part != nil && d.Part.FunctionCall != nil {
 				return nil
@@ -715,12 +778,21 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 			if d.Text == "" {
 				return nil
 			}
-			err := enc.Encode(GenerateResponse{
+			text := d.Text
+			if unescaper != nil {
+				text = unescaper.Process(text)
+			}
+			if text == "" {
+				return nil
+			}
+			chunk := GenerateResponse{
 				Model:     req.Model,
 				CreatedAt: time.Now(),
-				Response:  d.Text,
+				Response:  text,
 				Done:      false,
-			})
+			}
+			provider.DebugLogPayload(ctx, "outbound_response_chunk", chunk)
+			err := enc.Encode(chunk)
 			if err != nil {
 				return err
 			}
@@ -735,6 +807,22 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			return
 		}
+
+		if unescaper != nil {
+			leftover := unescaper.Flush()
+			if leftover != "" {
+				chunk := GenerateResponse{
+					Model:     req.Model,
+					CreatedAt: time.Now(),
+					Response:  leftover,
+					Done:      false,
+				}
+				provider.DebugLogPayload(ctx, "outbound_response_chunk", chunk)
+				_ = enc.Encode(chunk)
+				flusher.Flush()
+			}
+		}
+
 		total, load, promptDur, evalDur := metrics.finalize()
 		done := GenerateResponse{
 			Model:              req.Model,
@@ -749,6 +837,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 			EvalCount:          metrics.completionTokens,
 			EvalDuration:       evalDur,
 		}
+		provider.DebugLogPayload(ctx, "outbound_response_chunk", done)
 		if err := enc.Encode(done); err != nil {
 			rl.Logf("encode done: %v", err)
 		}
@@ -772,11 +861,17 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 			fullContent.WriteString(part.Text)
 		}
 	}
+	contentStr := fullContent.String()
+	pub, _ := provider.ParsePublisher(req.Model)
+	if pub == "google" {
+		unescaper := NewEntityUnescaper()
+		contentStr = unescaper.Process(contentStr) + unescaper.Flush()
+	}
 	total, load, promptDur, evalDur := metrics.finalize()
 	genResp := GenerateResponse{
 		Model:              req.Model,
 		CreatedAt:          time.Now(),
-		Response:           fullContent.String(),
+		Response:           contentStr,
 		Done:               true,
 		DoneReason:         doneReason(metrics.finishReason),
 		TotalDuration:      total,
@@ -786,6 +881,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		EvalCount:          metrics.completionTokens,
 		EvalDuration:       evalDur,
 	}
+	provider.DebugLogPayload(ctx, "outbound_response", genResp)
 	if err := json.NewEncoder(w).Encode(genResp); err != nil {
 		rl.Logf("encode response: %v", err)
 	}
@@ -827,9 +923,37 @@ func logCompletionForModel(rl *reqLogger, label, model string, m callMetrics) {
 		MetricsTokens("prompt", model, m.promptTokens-m.cachedPromptTokens)
 		MetricsTokens("cached", model, m.cachedPromptTokens)
 		MetricsTokens("completion", model, m.completionTokens)
+		logAndMeterCost(rl, label, model, m)
 	}
 	total, _, _, _ := m.finalize()
 	MetricsRequest(label, doneReason(m.finishReason), float64(total)/1e9)
+}
+
+// logAndMeterCost computes a per-request USD estimate from the live pricing
+// table (scraped from the Cloud Billing Catalog API), prints a breakdown to
+// the console alongside the request stats, and feeds the cumulative cost
+// metric. When pricing for the model is unknown it prints "cost=unavailable"
+// and skips the metric (no $0 noise). Cached prompt tokens are billed at the
+// reduced cached-input rate; the remaining prompt tokens at the input rate.
+func logAndMeterCost(rl *reqLogger, label, model string, m callMetrics) {
+	bd, ok := provider.EstimateCost(model, m.promptTokens, m.cachedPromptTokens, m.completionTokens)
+	if !ok {
+		log.Printf("[%s req=%s] cost=unavailable (no pricing for model=%q)", label, rl.id, model)
+		return
+	}
+	approx := ""
+	if bd.Approx {
+		approx = " (approx)"
+	}
+	log.Printf("[%s req=%s] cost%s total=$%.6f input=$%.6f cached=$%.6f output=$%.6f "+
+		"rates_per_mtok(in/cached/out)=$%.3f/$%.3f/$%.3f src=%q",
+		label, rl.id, approx,
+		bd.TotalUSD, bd.InputUSD, bd.CachedUSD, bd.OutputUSD,
+		bd.InputPerM, bd.CachedPerM, bd.OutputPerM, bd.Source,
+	)
+	MetricsEstimatedCost("input", model, bd.InputUSD)
+	MetricsEstimatedCost("cached", model, bd.CachedUSD)
+	MetricsEstimatedCost("output", model, bd.OutputUSD)
 }
 
 func logCompletion(rl *reqLogger, label string, m callMetrics) {

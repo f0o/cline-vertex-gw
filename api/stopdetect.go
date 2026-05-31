@@ -31,10 +31,10 @@ import (
 //
 // All knobs are read once at startup; toggle via env then restart.
 var (
-	loopDetectorEnabled  = envBoolAPI("GW_LOOP_DETECTOR", true)
-	loopDetectWindow     = envIntAPI("GW_LOOP_DETECT_WINDOW", 512)
-	loopDetectChunk      = envIntAPI("GW_LOOP_DETECT_CHUNK", 64)
-	loopDetectThreshold  = envIntAPI("GW_LOOP_DETECT_THRESHOLD", 6)
+	loopDetectorEnabled = envBoolAPI("GW_LOOP_DETECTOR", true)
+	loopDetectWindow    = envIntAPI("GW_LOOP_DETECT_WINDOW", 512)
+	loopDetectChunk     = envIntAPI("GW_LOOP_DETECT_CHUNK", 64)
+	loopDetectThreshold = envIntAPI("GW_LOOP_DETECT_THRESHOLD", 6)
 )
 
 // envBoolAPI is a thin local copy of provider.envBool — we don't want a
@@ -76,10 +76,10 @@ func envIntAPI(name string, def int) int {
 //
 // LoopDetector is NOT thread-safe; one instance per upstream stream.
 type LoopDetector struct {
-	enabled    bool
-	window     int // characters of history to retain
-	chunkSize  int // size of each hashed substring
-	threshold  int // hash count that signals a loop
+	enabled   bool
+	window    int // characters of history to retain
+	chunkSize int // size of each hashed substring
+	threshold int // hash count that signals a loop
 
 	buf []byte
 }

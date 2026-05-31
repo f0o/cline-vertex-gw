@@ -8,10 +8,10 @@ import "google.golang.org/genai"
 //
 //   - Text != ""               → a text fragment from the model
 //   - FunctionCall != nil      → a complete tool/function call (Anthropic and
-//                                Cohere emit one chunk per call; OpenAI-compat
-//                                accumulates streamed args internally and
-//                                emits one chunk per call after content_block_
-//                                stop / final delta)
+//     Cohere emit one chunk per call; OpenAI-compat
+//     accumulates streamed args internally and
+//     emits one chunk per call after content_block_
+//     stop / final delta)
 //
 // Surface emitters (Ollama, OpenAI) translate this to their respective
 // streaming wire shapes. Surface emitters that don't support tool calls on

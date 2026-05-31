@@ -1,11 +1,6 @@
 package provider
 
-import (
-	"log"
-	"os"
-	"strconv"
-	"strings"
-)
+// (env-parsing helpers live in env.go)
 
 // Token-budget knobs control how aggressively the gateway clamps callers'
 // requested generation budgets. The goal is cost predictability for Cline
@@ -31,23 +26,8 @@ var (
 	hardMaxOutputTokens    = envInt32("GW_MAX_OUTPUT_TOKENS_HARD", 0)
 )
 
-// envInt32 parses a non-negative int32 env var with a default. Logs and
-// returns the default on garbage input so a typo in a deployment config
-// can't silently disable the safety net.
-func envInt32(name string, def int32) int32 {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.ParseInt(v, 10, 32)
-	if err != nil || n < 0 {
-		log.Printf("invalid %s=%q (want non-negative int); using default %d", name, v, def)
-		return def
-	}
-	return int32(n)
-}
-
 // ApplyOutputCaps returns a (possibly new) *GenerationOptions reflecting the
+
 // gateway's configured defaults and hard caps on MaxTokens. It is safe to
 // call with nil opts; the returned value is non-nil iff a cap was applied.
 //

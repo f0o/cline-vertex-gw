@@ -131,7 +131,7 @@ func (h *APIHandler) VersionHandler(w http.ResponseWriter, r *http.Request) {
 
 // writeJSON is a tiny helper for the health/version handlers; the chat
 // handlers do their own framing because they stream NDJSON / SSE.
-func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

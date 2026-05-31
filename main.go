@@ -172,6 +172,15 @@ func main() {
 		}
 		vertexClient = vc
 		defer vertexClient.Close()
+
+		// Warm the live pricing table (scraped from the Cloud Billing Catalog
+		// API) so the first request can already show a cost estimate. Runs in
+		// a goroutine — best-effort, never blocks startup, and a billing-API
+		// hiccup just means estimates appear after the first background
+		// refresh. Disabled when GW_PRICING=off.
+		if provider.PricingEnabled() {
+			go vertexClient.WarmPricing(rootCtx)
+		}
 	}
 
 	// Publish the build version so /healthz and structured-log preambles can

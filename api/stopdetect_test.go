@@ -210,9 +210,9 @@ func TestEnvIntAPI(t *testing.T) {
 	}{
 		{"", 42, 42},
 		{"100", 42, 100},
-		{"0", 42, 42},     // non-positive → default
-		{"-5", 42, 42},    // negative → default
-		{"abc", 42, 42},   // garbage → default
+		{"0", 42, 42},   // non-positive → default
+		{"-5", 42, 42},  // negative → default
+		{"abc", 42, 42}, // garbage → default
 	}
 	for _, c := range cases {
 		t.Setenv(key, c.v)

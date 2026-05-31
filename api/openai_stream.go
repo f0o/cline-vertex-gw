@@ -54,6 +54,12 @@ func (h *APIHandler) openaiChatNonStream(
 			fullContent.WriteString(part.Text)
 		}
 	}
+	contentStr := fullContent.String()
+	pub, _ := provider.ParsePublisher(req.Model)
+	if pub == "google" {
+		unescaper := NewEntityUnescaper()
+		contentStr = unescaper.Process(contentStr) + unescaper.Flush()
+	}
 	finish := finishReasonOAI(metrics.finishReason)
 	if len(toolCalls) > 0 && finish != "tool_calls" {
 		// Defensive upgrade: if the upstream reported "stop" but emitted
@@ -70,7 +76,7 @@ func (h *APIHandler) openaiChatNonStream(
 			Index: 0,
 			Message: OAIResponseMessage{
 				Role:      "assistant",
-				Content:   fullContent.String(),
+				Content:   contentStr,
 				ToolCalls: toolCalls,
 			},
 			FinishReason: finish,
@@ -83,6 +89,7 @@ func (h *APIHandler) openaiChatNonStream(
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	provider.DebugLogPayload(ctx, "outbound_response", out)
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		rl.Logf("encode response: %v", err)
 	}
@@ -168,7 +175,7 @@ func (h *APIHandler) openaiChatStream(
 				FinishReason: nil,
 			}},
 		}
-		if err := writeSSEData(w, chunk); err != nil {
+		if err := writeSSEData(ctx, w, chunk); err != nil {
 			return err
 		}
 		flusher.Flush()
@@ -194,7 +201,7 @@ func (h *APIHandler) openaiChatStream(
 				FinishReason: nil,
 			}},
 		}
-		if err := writeSSEData(w, chunk); err != nil {
+		if err := writeSSEData(ctx, w, chunk); err != nil {
 			return err
 		}
 		flusher.Flush()
@@ -240,11 +247,17 @@ func (h *APIHandler) openaiChatStream(
 				FinishReason: nil,
 			}},
 		}
-		if err := writeSSEData(w, chunk); err != nil {
+		if err := writeSSEData(ctx, w, chunk); err != nil {
 			return err
 		}
 		flusher.Flush()
 		return nil
+	}
+
+	var unescaper *EntityUnescaper
+	pubStream, _ := provider.ParsePublisher(req.Model)
+	if pubStream == "google" {
+		unescaper = NewEntityUnescaper()
 	}
 
 	onDelta := func(d StreamDelta) error {
@@ -252,7 +265,14 @@ func (h *APIHandler) openaiChatStream(
 			return emitToolCallDelta(d.Part)
 		}
 		if d.Text != "" {
-			return emitTextDelta(d.Text)
+			text := d.Text
+			if unescaper != nil {
+				text = unescaper.Process(text)
+			}
+			if text == "" {
+				return nil
+			}
+			return emitTextDelta(text)
 		}
 		return nil
 	}
@@ -270,7 +290,7 @@ func (h *APIHandler) openaiChatStream(
 					Type:    "upstream_error",
 				},
 			}
-			_ = writeSSEData(w, errEvent)
+			_ = writeSSEData(ctx, w, errEvent)
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
 			return
@@ -282,10 +302,19 @@ func (h *APIHandler) openaiChatStream(
 				Type:    "upstream_error",
 			},
 		}
-		_ = writeSSEData(w, errEvent)
+		_ = writeSSEData(ctx, w, errEvent)
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		flusher.Flush()
 		return
+	}
+
+	if unescaper != nil {
+		leftover := unescaper.Flush()
+		if leftover != "" {
+			if err := emitTextDelta(leftover); err != nil {
+				rl.Logf("emit leftover: %v", err)
+			}
+		}
 	}
 
 	// Ensure clients always see at least one event even for empty completions.
@@ -319,7 +348,7 @@ func (h *APIHandler) openaiChatStream(
 			TotalTokens:      metrics.promptTokens + metrics.completionTokens,
 		},
 	}
-	if err := writeSSEData(w, finalChunk); err != nil {
+	if err := writeSSEData(ctx, w, finalChunk); err != nil {
 		rl.Logf("encode final chunk: %v", err)
 	}
 	// Terminator sentinel.
@@ -333,7 +362,8 @@ func (h *APIHandler) openaiChatStream(
 // encoding/json does not insert newlines into strings, but it does append a
 // trailing '\n' from Encode which we replace), so the SSE framing remains
 // `data: <json>\n\n`.
-func writeSSEData(w http.ResponseWriter, v interface{}) error {
+func writeSSEData(ctx context.Context, w http.ResponseWriter, v any) error {
+	provider.DebugLogPayload(ctx, "outbound_response_chunk", v)
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal sse: %w", err)
@@ -358,7 +388,7 @@ func httpStatusForUpstreamError(err error) (status int, errType string) {
 		return http.StatusUnauthorized, "authentication_error"
 	case "not-found":
 		return http.StatusNotFound, "not_found_error"
-	case "unavailable", "upstream-5xx", "network":
+	case "unavailable", "upstream-5xx", "network", "overloaded":
 		return http.StatusBadGateway, "upstream_error"
 	case "client-canceled":
 		// Return 499-equivalent. OpenAI doesn't have a canonical mapping;

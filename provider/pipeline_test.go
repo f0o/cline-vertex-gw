@@ -25,7 +25,7 @@ func TestPipeline_AllDisabledIsNoOp(t *testing.T) {
 	}
 	sys := "  system   \r\n"
 
-	out, gotSys := applyCompressionPipeline(in, sys)
+	out, gotSys := applyCompressionPipeline(in, sys, "claude-3-5-sonnet")
 	if gotSys != sys {
 		t.Errorf("system prompt mutated: was %q now %q", sys, gotSys)
 	}
@@ -59,7 +59,7 @@ func TestPipeline_NormalizeRunsBeforeTrim(t *testing.T) {
 		mkTurn(genai.RoleUser, "tail"),
 	}
 
-	out, _ := applyCompressionPipeline(in, "")
+	out, _ := applyCompressionPipeline(in, "", "claude-3-5-sonnet")
 	if len(out) != 2 {
 		t.Fatalf("expected normalization to save the bloated turn from trim; got len=%d", len(out))
 	}
@@ -86,7 +86,7 @@ func TestPipeline_EnvCollapseHelpsTrim(t *testing.T) {
 		mkTurn(genai.RoleModel, "ack"),
 		mkTurn(genai.RoleUser, "final"),
 	}
-	out, _ := applyCompressionPipeline(in, "")
+	out, _ := applyCompressionPipeline(in, "", "claude-3-5-sonnet")
 	if len(out) != 3 {
 		t.Fatalf("expected env-collapse to let turn 1 survive trim; got len=%d", len(out))
 	}
@@ -115,7 +115,7 @@ func TestPipeline_DedupAfterTrim(t *testing.T) {
 		mkTurn(genai.RoleModel, "ack"),
 		mkTurn(genai.RoleUser, big), // turn 3 - kept
 	}
-	out, _ := applyCompressionPipeline(in, "")
+	out, _ := applyCompressionPipeline(in, "", "claude-3-5-sonnet")
 
 	// Find the last user turn in the output and assert its body wasn't
 	// replaced with a placeholder pointing at a turn that's no longer
@@ -140,7 +140,7 @@ func TestPipeline_DedupReplacesDuplicateInKeptWindow(t *testing.T) {
 		mkTurn(genai.RoleModel, "ack"),
 		mkTurn(genai.RoleUser, big),
 	}
-	out, _ := applyCompressionPipeline(in, "")
+	out, _ := applyCompressionPipeline(in, "", "claude-3-5-sonnet")
 	if !strings.Contains(out[2].Parts[0].Text, "identical content already shown in turn 1") {
 		t.Errorf("dedup didn't replace turn 3 dup: %q", out[2].Parts[0].Text)
 	}
@@ -190,7 +190,7 @@ func TestPipeline_FullStackInteraction(t *testing.T) {
 		originalTotal += contentBytes(c)
 	}
 
-	out, _ := applyCompressionPipeline(in, "")
+	out, _ := applyCompressionPipeline(in, "", "claude-3-5-sonnet")
 
 	compressedTotal := 0
 	for _, c := range out {
@@ -237,4 +237,38 @@ func TestPipeline_FullStackInteraction(t *testing.T) {
 	t.Logf("compression: %dB -> %dB (%.0f%% reduction)",
 		originalTotal, compressedTotal,
 		100.0*(1.0-float64(compressedTotal)/float64(originalTotal)))
+}
+
+// TestPipeline_GeminiXMLHint verifies that Gemini-specific XML hints are correctly
+// injected into the system prompt when calling a google/gemini model, and NOT injected
+// for other models.
+func TestPipeline_GeminiXMLHint(t *testing.T) {
+	// Enable XML hint configuration
+	oldHint := geminiXmlHint
+	geminiXmlHint = true
+	defer func() { geminiXmlHint = oldHint }()
+
+	sysPrompt := "You are a helpful assistant."
+
+	// Scenario 1: Non-Gemini model (e.g. Claude)
+	_, sysNonGemini := applyCompressionPipeline([]*genai.Content{}, sysPrompt, "anthropic/claude-3-5-sonnet")
+	if strings.Contains(sysNonGemini, "IMPORTANT FOR TOOL CALLS") {
+		t.Errorf("expected XML hint NOT to be injected for non-Gemini model, but got: %q", sysNonGemini)
+	}
+
+	// Scenario 2: Gemini model
+	_, sysGemini := applyCompressionPipeline([]*genai.Content{}, sysPrompt, "google/gemini-1.5-pro")
+	if !strings.Contains(sysGemini, "IMPORTANT FOR TOOL CALLS") {
+		t.Errorf("expected XML hint to be injected for Gemini model, but system prompt was: %q", sysGemini)
+	}
+	if !strings.Contains(sysGemini, "do NOT output") {
+		t.Errorf("expected XML hint to contain specific raw character warning, but got: %q", sysGemini)
+	}
+
+	// Scenario 3: XML hint config disabled
+	geminiXmlHint = false
+	_, sysDisabled := applyCompressionPipeline([]*genai.Content{}, sysPrompt, "google/gemini-1.5-pro")
+	if strings.Contains(sysDisabled, "IMPORTANT FOR TOOL CALLS") {
+		t.Errorf("expected XML hint NOT to be injected when disabled, but got: %q", sysDisabled)
+	}
 }

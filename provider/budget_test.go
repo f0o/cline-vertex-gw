@@ -60,11 +60,11 @@ func TestTrimContents_DropsOldest(t *testing.T) {
 	defer withMaxInputChars(t, 1000)()
 
 	in := []*genai.Content{
-		mkTurn(genai.RoleUser, strings.Repeat("a", 400)),    // 0 - should drop
-		mkTurn(genai.RoleModel, strings.Repeat("b", 400)),   // 1 - should drop
-		mkTurn(genai.RoleUser, strings.Repeat("c", 400)),    // 2 - keep
-		mkTurn(genai.RoleModel, strings.Repeat("d", 400)),   // 3 - keep
-		mkTurn(genai.RoleUser, "final question"),            // 4 - keep
+		mkTurn(genai.RoleUser, strings.Repeat("a", 400)),  // 0 - should drop
+		mkTurn(genai.RoleModel, strings.Repeat("b", 400)), // 1 - should drop
+		mkTurn(genai.RoleUser, strings.Repeat("c", 400)),  // 2 - keep
+		mkTurn(genai.RoleModel, strings.Repeat("d", 400)), // 3 - keep
+		mkTurn(genai.RoleUser, "final question"),          // 4 - keep
 	}
 	out := TrimContents(in, "")
 	if len(out) >= len(in) {

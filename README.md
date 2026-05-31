@@ -56,6 +56,17 @@ DeepSeek, Qwen, and Nvidia-hosted MaaS models — without changing the client.
   OpenAI-compat `image_url`). Capability-gated per model so a request to a
   text-only model returns a clean 400 instead of failing mid-stream. See
   [Multimodal](#multimodal) below.
+- **Universal, selective prompt caching** — a single provider-agnostic
+  cache planner decides which prefix boundaries are worth caching based
+  on the write-vs-read economics (a cache *write* costs ~125% of base
+  tokens, a *read* ~10%), so it never caches a prefix that won't be read
+  back. Honored per-publisher: Anthropic inline `cache_control`
+  breakpoints, Gemini explicit TTL-managed `CachedContent`, and
+  `cached_tokens` telemetry for the implicit-cache MaaS publishers. See
+  [Token-cost optimization](#token-cost-optimization) below.
+- **In-flight prompt compression pipeline** — whitespace normalize, stale
+  env-block collapse, history trim, and verbatim-block dedup, all in the
+  shared dispatch layer so every publisher benefits.
 - **Per-request retries** with exponential backoff + jitter, only when no
   bytes have been streamed (no duplicate-output hazard).
 - **Authenticated mode** via a shared bearer token (protects both `/api/*`
@@ -369,6 +380,11 @@ All configuration is via environment variables.
 | `GW_TAGS_CACHE_TTL_SEC` | `60` | TTL for the in-memory `/api/tags` and `/v1/models` cache. Cline's model picker polls this endpoint aggressively; caching cuts the fan-out across nine publishers down to once per minute. Set to `0` to disable. |
 | `GW_MAX_IMAGE_BYTES_PER_PART` | `10485760` (10 MiB) | Per-image size cap on the **decoded** bytes. Requests with a larger image return a 400 with a clear error pointing at this knob. Tightens an attack surface (a 100 MB inline base64 blob is ~75 MB of memory). |
 | `GW_MAX_IMAGE_BYTES_PER_REQUEST` | `33554432` (32 MiB) | Aggregate cap across **all** decoded images in a single request. Trips on the cumulative total, not per-part. |
+| `GW_PRICING` | `on` | Cost estimation toggle. When on, the gateway scrapes per-token prices live from the GCP **Cloud Billing Catalog API** and prints a per-request USD breakdown alongside the request stats (and feeds the `cline_vertex_gw_estimated_cost_usd_total` metric). Set to `off`/`false`/`0` to disable all pricing scrapes and cost output. |
+| `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Refresh interval for the live pricing table. Prices change on the order of months, so the catalog is scraped at most once per interval (warmed once at startup, then refreshed lazily in the background on request completion). |
+| `GW_PRICING_DEBUG` | `off` | When on, the pricing scrape logs a verbose diagnostic dump (`[pricing][debug]`): the matched/not-matched billing services, a per-SKU resolution trace, and the final per-model resolved rate table. Use it to verify or troubleshoot the SKU→model/rate mapping against your project's catalog. |
+
+
 
 Credentials come from Google Application Default Credentials. No
 gateway-specific GCP env var is needed beyond project + location.
@@ -410,30 +426,83 @@ operator-actionable metrics:
 | `cline_vertex_gw_build_info` | gauge | `version` | Confirms which binary is running. |
 | `cline_vertex_gw_requests_total` | counter | `route`, `status` | Per-route request volume / `done_reason` breakdown. |
 | `cline_vertex_gw_request_duration_seconds` | histogram | `route` | Latency by route (buckets tuned for Vertex AI: 50ms–120s). |
-| `cline_vertex_gw_upstream_tokens_total` | counter | `kind`, `model` | The whole point. `kind=cached/prompt` ratio tells you if Anthropic prompt caching is working; `kind=completion` × your unit price = spend. |
+| `cline_vertex_gw_upstream_tokens_total` | counter | `kind`, `model` | The whole point. The `kind=cached / kind=prompt` ratio tells you whether prompt caching is working for that `model` (across Anthropic, Gemini, and the implicit-cache MaaS publishers); `kind=completion` × your unit price = spend. |
 | `cline_vertex_gw_upstream_retries_total` | counter | `class` | Spikes in `class=rate-limited` mean you need to raise quota; spikes in `class=network` mean upstream instability. |
 | `cline_vertex_gw_upstream_loop_detector_fired_total` | counter | — | How often the runaway detector saved you money. |
 | `cline_vertex_gw_tags_cache_hits_total` / `_misses_total` | counters | — | Hit ratio for the `/api/tags` cache. Should approach 1.0 in steady state. |
 | `cline_vertex_gw_panics_recovered_total` | counter | — | Any non-zero value indicates a bug — file an issue. |
 | `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage. |
+| `cline_vertex_gw_estimated_cost_usd_total` | counter | `kind`, `model` | Cumulative **estimated** USD spend by `kind={input,cached,output}` and `model`. Prices are scraped live from the GCP Cloud Billing Catalog API. `sum(rate(cline_vertex_gw_estimated_cost_usd_total[1h]))` gives your hourly burn; `by (model)` shows which model dominates spend. Disabled when `GW_PRICING=off`. |
+
+### Cost estimation
+
+When `GW_PRICING` is on (the default), the gateway estimates the USD cost of
+every request and prints a breakdown to the console right after the request
+stats line:
+
+```
+[chat-stream req=1a2b3c-004] done total=4.2s … prompt_tok=18500 cached_tok=17000 cached_pct=92% eval_tok=820 tps=195.2 reason=stop
+[chat-stream req=1a2b3c-004] cost total=$0.012063 input=$0.001875 cached=$0.005270 output=$0.004918 rates_per_mtok(in/cached/out)=$1.250/$0.310/$10.000 src="Vertex AI"
+```
+
+Prices are **scraped live from the GCP Cloud Billing Catalog API**
+(`cloudbilling.googleapis.com`) — there is no hardcoded price table to drift
+out of date. On startup (and lazily every `GW_PRICING_CACHE_TTL_SEC`) the
+gateway pages the SKUs of **every** billing service and resolves each SKU's
+free-text description to a `(model, token-kind)` pair, normalizing every rate
+to USD per 1M tokens. It deliberately does **not** filter by service name —
+Google files the Claude token SKUs under the *"Vertex AI Search"* service,
+Gemini/MaaS under *"Vertex AI"*, and may refile models again; the strict
+per-SKU resolver (token-priced, not Batch/cache-write, matches a known model
+family) is the gate instead. **Cached** prompt tokens are billed at the reduced
+cached-input rate; the remaining prompt tokens at the full input rate;
+completion tokens at the output rate.
+
+
+Notes & caveats:
+
+- Estimates only. SKU descriptions are free-text, so a model whose SKU we
+  can't confidently resolve simply prints `cost=unavailable` and is omitted
+  from the metric (correctness by omission — never a wrong number).
+- For the handful of character-priced SKUs, tokens are approximated from
+  characters and the line is tagged `cost (approx)`.
+- The base (lowest) input tier is used as the representative rate; long-context
+  premium tiers are not modeled per-request.
+- Requires the Cloud Billing API to be enabled and the runtime credentials to
+  be able to read the public catalog. A 403/404 just disables cost output
+  (logged once); it never blocks a chat request.
+- Set `GW_PRICING=off` to disable the scrape and all cost output entirely.
 
 ### Token-cost optimization
+
 
 The gateway sits between the client and Vertex, which makes it the right
 place to shave token cost without changing the client.
 
-**Prompt caching is always on** for every model whose publisher supports
-it on Vertex AI. No env flag, no configuration — the gateway just does
-the right thing for each upstream:
+**Prompt caching is universal and selective** (on by default,
+`GW_PROMPT_CACHE`). A single provider-agnostic **cache planner** decides
+which prefix boundaries are worth caching based on the write-vs-read
+economics — a cache *write* costs ~125% of base input tokens (a one-time
+25% premium) while a *read* costs only ~10%. So the planner is deliberately
+selective: it **never** places a cache breakpoint on a prefix that has no
+later turn to read it back (e.g. a one-shot call), because that would pay
+the write premium for zero reads. "Caching everything" would erase the
+savings; the planner caches only the few high-ROI, high-stability anchors
+(system+tools head, first user turn, and a rolling tail for long sessions).
+
+The planner is computed identically for every publisher; each adapter then
+honors it with whatever primitive it has:
 
 | Publisher | Caching mechanism | What the gateway does |
 |---|---|---|
-| **Anthropic** (Claude) | `cache_control: {"type":"ephemeral"}` markers on the system prompt + first user turn | Tagged automatically when the prefix exceeds the minimum cacheable size (~4 KB ≈ 1100 tokens). Subsequent same-prefix requests bill at ~10% of normal input rate. |
-| **Google** (Gemini) | Implicit prefix caching on Vertex (≥1024-token prefixes) | Automatic from Vertex's side — no client change required. The gateway surfaces `cached_content_token_count` via the same telemetry as Anthropic. |
-| **Cohere**, **Meta Llama**, **Mistral**, **AI21 Jamba**, **DeepSeek**, **Qwen**, **Nvidia** | No prompt-caching API on Vertex today | N/A — these publishers don't expose a caching primitive. The gateway's other optimizations (output caps, input trim, loop detector) still apply. |
+| **Anthropic** (Claude) | Inline `cache_control: {"type":"ephemeral"}` breakpoints (up to 4) | Planner places breakpoints on the system+tools head, the first user turn, and a rolling tail for long sessions — only when each prefix clears the minimum size AND a later turn will read it back. Subsequent same-prefix requests bill at ~10% of normal input rate. |
+| **Google** (Gemini) | Explicit `CachedContent` resource (TTL-managed) **+** Vertex implicit prefix caching | When the system+tools prefix is large and stable, the gateway mints a `CachedContent` resource (TTL `GW_GEMINI_CACHE_TTL`, auto-expiring — no delete) and references it by name, sending only the suffix. Falls back to a normal call on any cache miss/error. Implicit Vertex caching still applies on top. |
+| **Meta Llama**, **Mistral**, **DeepSeek**, **Qwen**, **AI21 Jamba**, **Nvidia** | Implicit prefix caching (no caller control) | The gateway can't place breakpoints, so it relies on prefix stability (the compression pipeline) and **surfaces `cached_tokens`** from `usage.prompt_tokens_details` so cache ROI is measurable here too. |
+| **Cohere** (Command R/R+) | No prompt-caching API on Vertex today | N/A — no caching primitive. The other optimizations (output caps, input trim, dedup, loop detector) still apply. |
 
 For real Cline workloads on Anthropic this typically saves **70–90% of
 input tokens** per follow-up turn in a session.
+
 
 In addition to caching, the gateway runs an **in-flight prompt
 compression pipeline** on every request. It executes between the client
@@ -441,7 +510,7 @@ and the per-publisher adapter, so every upstream benefits without
 per-adapter changes:
 
 ```
-client → ApplyOutputCaps → NormalizeWhitespace → CollapseEnvBlocks → TrimContents → DedupReplayedBlocks → publisher adapter
+client → ApplyOutputCaps → BreakLoopTrap → PruneStaleTools → NormalizeWhitespace → CollapseEnvBlocks → TruncateToolResults → TrimContents → DedupReplayedBlocks → DedupSubstringBlocks → publisher adapter
 ```
 
 Each stage has an env-flag fast-path that returns the input untouched
@@ -454,9 +523,22 @@ when disabled; defaults are tuned to be safe-on-by-default.
 | `GW_COLLAPSE_ENV_MIN_BYTES` | `256` | Env blocks below this size are left alone (placeholder overhead would dominate). |
 | `GW_DEDUP_REPLAY` | `on` | When the same large content block (≥ `GW_DEDUP_MIN_BYTES`) appears more than once across kept turns, second+ occurrences are replaced with a back-pointing placeholder (`[N bytes elided: identical content already shown in turn K (sha256=…)]`). The first occurrence is always preserved. Role-scoped — a user turn never points at an assistant turn. Typical savings: 20–60% on long Cline edit loops. |
 | `GW_DEDUP_MIN_BYTES` | `512` | Minimum block size eligible for dedup. Smaller blocks can't recoup placeholder overhead (~80 bytes). |
+| `GW_TOOL_RESULT_TRUNCATE` | `on` | Middle-elide oversized tool-result text (read_file dumps, terminal output) on every turn EXCEPT the latest, keeping a head+tail window and dropping the middle. Applies to both genai `FunctionResponse` payloads and flattened text parts. The freshest tool output is always preserved verbatim. Typical savings: 20–50% on long agentic sessions. |
+| `GW_TOOL_RESULT_MAX_BYTES` | `8000` | Only tool-result text larger than this (~2.3k tokens) is eligible for truncation. |
+| `GW_TOOL_RESULT_HEAD_BYTES` | `2000` | Bytes preserved from the START of an elided tool result (file headers, imports). |
+| `GW_TOOL_RESULT_TAIL_BYTES` | `1000` | Bytes preserved from the END of an elided tool result (trailing summary/error lines). |
+| `GW_DEDUP_SUBSTRING` | `off` | More aggressive than `GW_DEDUP_REPLAY`: collapses PARTIAL re-pastes — when an earlier large block (≥ `GW_DEDUP_SUBSTRING_MIN_BYTES`) appears VERBATIM as a contiguous substring inside a later same-role turn, the embedded copy becomes a back-pointer while surrounding new text is preserved. Opt-in (off by default) because it rewrites turn interiors. |
+| `GW_DEDUP_SUBSTRING_MIN_BYTES` | `1024` | Minimum length of an earlier block searched for as a substring. |
+| `GW_PRUNE_STALE_TOOLS` | `off` | Drop superseded READ-ONLY tool exchanges: when an idempotent inspection tool (`read_file`, `list_files`, `search_files`, `list_code_definition_names`) is later re-invoked with identical arguments, the earlier call/response pair is removed (the latest read is authoritative). Mutating tools (write/execute) are never pruned. Call/response pairs are removed together to preserve role alternation. Opt-in (off by default). |
 | `GW_DEFAULT_MAX_OUTPUT_TOKENS` | `0` (off) | When a request omits `max_tokens` / `num_predict`, substitute this value. Bounds runaway generations from clients that leave the field empty. |
 | `GW_MAX_OUTPUT_TOKENS_HARD` | `0` (off) | Per-deployment ceiling: any caller value above this is silently clamped DOWN. Enforces a cost-per-request ceiling regardless of what clients ask for. |
 | `GW_MAX_INPUT_CHARS` | `0` (off) | Soft byte-budget on the combined size of all messages + system prompt. When exceeded, oldest turns are dropped first; the latest user turn is always preserved. Approximate ratio: ~3.5 chars/token, so `350000` ≈ 100k tokens. |
+| `GW_PROMPT_CACHE` | `on` | Master switch for the **universal, selective prompt-cache planner**. Decides which prefix boundaries are worth caching based on the write-vs-read economics (a cache *write* costs ~125% of base tokens; a *read* ~10%). It NEVER caches a prefix that has no later turn to read it back — so one-shot calls pay no write premium. Applies to Anthropic (inline `cache_control`) and Gemini (`CachedContent`); a no-op for implicit-cache (Llama/Mistral/DeepSeek/Qwen) and no-cache (Cohere) publishers. |
+| `GW_CACHE_MIN_BYTES` | `4000` | Minimum prefix size (≈1100 tokens) before a cache breakpoint is placed. Below this, Anthropic ignores the marker anyway and the write premium can't be recouped. |
+| `GW_CACHE_TAIL_MIN_TURNS` | `6` | Minimum conversation turns before a rolling **tail** breakpoint is added (caches the growing middle of long agentic sessions for the next request). |
+| `GW_CACHE_TAIL_MIN_BYTES` | `16000` | Minimum cumulative prefix size up to the tail anchor before the rolling breakpoint is placed. |
+| `GW_GEMINI_CACHE_TTL` | `600` (10m) | TTL, in seconds, for Gemini `CachedContent` resources. Resources auto-expire (no delete needed). Sized to the gap between agent turns so we never pay storage for a cache that won't be re-read in time. |
+| `GW_GEMINI_CACHE_MIN_BYTES` | `128000` | Minimum system+tools prefix size (≈32k tokens) before an explicit Gemini cache resource is created. Vertex rejects sub-minimum creates, so this avoids wasted attempts. |
 | `GW_LOOP_DETECTOR` | `on` | Master switch for the mid-stream runaway-output detector. When a model gets stuck emitting the same paragraph repeatedly the gateway cancels the upstream call early; the partial output already streamed is delivered with `done_reason=length`. |
 | `GW_LOOP_DETECT_WINDOW` | `512` | Size, in chars, of the rolling buffer the loop detector inspects. |
 | `GW_LOOP_DETECT_CHUNK` | `64` | Size of each hashed substring within the window. |

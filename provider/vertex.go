@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +17,37 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/genai"
 )
+
+type ContextKey string
+
+const (
+	ContextKeyReqID ContextKey = "req_id"
+	ContextKeyRoute ContextKey = "route"
+)
+
+// cloudPlatformScope is the OAuth2 scope required for all Vertex AI / Cloud
+// Billing REST calls made by this package.
+const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
+// DebugLogPayload serializes the payload as JSON and logs it using slog.DebugContext.
+func DebugLogPayload(ctx context.Context, step string, payload any) {
+	reqID, _ := ctx.Value(ContextKeyReqID).(string)
+	route, _ := ctx.Value(ContextKeyRoute).(string)
+
+	var payloadStr string
+	if b, err := json.Marshal(payload); err == nil {
+		payloadStr = string(b)
+	} else {
+		payloadStr = fmt.Sprintf("%+v", payload)
+	}
+
+	slog.DebugContext(ctx, "payload log",
+		slog.String("step", step),
+		slog.String("req_id", reqID),
+		slog.String("route", route),
+		slog.String("payload", payloadStr),
+	)
+}
 
 // VertexClient wraps a genai client and exposes higher-level helpers used by
 // the Ollama-compatible HTTP API.
@@ -37,17 +69,18 @@ func NewVertexClient(ctx context.Context, projectID, location string) (*VertexCl
 		return nil, fmt.Errorf("error creating Vertex AI client: %w", err)
 	}
 
-	httpClient, err := google.DefaultClient(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	httpClient, err := google.DefaultClient(ctx, cloudPlatformScope)
 	if err != nil {
 		return nil, fmt.Errorf("error creating authenticated http client: %w", err)
 	}
+
 	// Apply a sane timeout so a hung discovery call can't stall /api/tags.
 	httpClient.Timeout = 15 * time.Second
 
 	// Separate client for streaming/generation calls — these legitimately run
 	// for many seconds, so we rely on the request context for cancellation
 	// rather than a fixed Timeout that would truncate long completions.
-	streamHTTP, err := google.DefaultClient(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	streamHTTP, err := google.DefaultClient(ctx, cloudPlatformScope)
 	if err != nil {
 		return nil, fmt.Errorf("error creating authenticated streaming http client: %w", err)
 	}
@@ -60,7 +93,6 @@ func NewVertexClient(ctx context.Context, projectID, location string) (*VertexCl
 		streamHTTP: streamHTTP,
 	}, nil
 }
-
 
 func (vc *VertexClient) Close() {
 	// genai.Client does not expose a Close in the public interface; the
@@ -81,18 +113,17 @@ func (vc *VertexClient) publisherEndpoint(publisher, modelID, method string) str
 		host, vc.projectID, vc.location, publisher, modelID, method)
 }
 
-
 // GenerationOptions is the provider-side representation of generation tuning
 // parameters. Pointer fields let callers omit settings without confusing them
 // with explicit zero values.
 //
 // Tool-calling fields:
 //   - Tools:      the function declarations the model is allowed to call this
-//                 turn. Pass-through to per-publisher adapters which translate
-//                 to each upstream's native shape. nil/empty disables tools.
+//     turn. Pass-through to per-publisher adapters which translate
+//     to each upstream's native shape. nil/empty disables tools.
 //   - ToolConfig: the upstream-neutral tool_choice / function-calling mode
-//                 (AUTO / ANY / NONE / specific function name). Optional; nil
-//                 means the publisher's default ("auto" for every adapter).
+//     (AUTO / ANY / NONE / specific function name). Optional; nil
+//     means the publisher's default ("auto" for every adapter).
 //
 // We deliberately reuse genai.Tool / genai.ToolConfig as the internal lingua
 // franca — same pattern as everything else in this struct — so that adding a
@@ -154,6 +185,60 @@ func FormatModelName(model string) string {
 	return fmt.Sprintf("publishers/%s/models/%s", publisher, model)
 }
 
+// adapterKind classifies which backend translation path a publisher uses.
+type adapterKind int
+
+const (
+	adapterGoogle       adapterKind = iota // genai SDK (Gemini / Gemma)
+	adapterAnthropic                       // Anthropic Messages API
+	adapterCohere                          // Cohere /chat API
+	adapterOpenAICompat                    // shared OpenAI-compatible adapter
+)
+
+// publisherInfo is the single source of truth for one Vertex publisher: how to
+// recognize it from a prefixed model id, which backend adapter handles it, and
+// whether it participates in /api/tags discovery.
+type publisherInfo struct {
+	kind         adapterKind
+	discoverable bool // included in supportedPublishers for ListModels fan-out
+}
+
+// publisherRegistry is the ONE place that enumerates every publisher namespace
+// the gateway knows about. ParsePublisher, the Generate/GenerateStream
+// dispatch, openai-compat classification, and the discovery list all derive
+// from this map so adding a publisher is a single-entry change.
+var publisherRegistry = map[string]publisherInfo{
+	"google":      {kind: adapterGoogle, discoverable: true},
+	"anthropic":   {kind: adapterAnthropic, discoverable: true},
+	"cohere":      {kind: adapterCohere, discoverable: true},
+	"meta":        {kind: adapterOpenAICompat, discoverable: true}, // Llama 3.x / 4 (MaaS)
+	"mistralai":   {kind: adapterOpenAICompat, discoverable: true}, // Mistral Large, Codestral, Mixtral
+	"ai21":        {kind: adapterOpenAICompat, discoverable: true}, // Jamba 1.5 / 2.x
+	"deepseek-ai": {kind: adapterOpenAICompat, discoverable: true}, // DeepSeek
+	"qwen":        {kind: adapterOpenAICompat, discoverable: true}, // Qwen
+	"nvidia":      {kind: adapterOpenAICompat, discoverable: true}, // Nvidia-hosted MaaS models
+	// moonshotai is recognized as a prefix but has no adapter / discovery yet.
+	"moonshotai": {kind: adapterOpenAICompat, discoverable: false},
+}
+
+// publisherSubstringHints maps a case-insensitive substring of a bare model id
+// to its publisher, used when the id carries no explicit "publisher/" prefix.
+// Order matters only for documentation; each model matches at most one family.
+var publisherSubstringHints = []struct {
+	substr    string
+	publisher string
+}{
+	{"claude", "anthropic"},
+	{"llama", "meta"},
+	{"mistral", "mistralai"},
+	{"mixtral", "mistralai"},
+	{"codestral", "mistralai"},
+	{"jamba", "ai21"},
+	{"command", "cohere"},
+	{"deepseek", "deepseek-ai"},
+	{"qwen", "qwen"},
+}
+
 // ParsePublisher splits a model identifier into its publisher namespace and
 // bare model id. It handles three input shapes:
 //   - already-qualified resource paths: "publishers/anthropic/models/claude-..."
@@ -171,48 +256,35 @@ func ParsePublisher(model string) (publisher, modelID string) {
 			return parts[1], parts[3]
 		}
 	}
-	// "anthropic/claude-opus-4-7" style
+	// "anthropic/claude-opus-4-7" style: a known publisher prefix before the
+	// first slash (and no dot, which would indicate a versioned bare id).
 	if idx := strings.Index(model, "/"); idx > 0 && !strings.Contains(model[:idx], ".") {
-		head := model[:idx]
-		switch head {
-		case "anthropic", "google", "meta", "mistralai", "ai21", "cohere",
-			"deepseek-ai", "qwen", "nvidia", "moonshotai":
+		if head := model[:idx]; isKnownPublisher(head) {
 			return head, model[idx+1:]
 		}
 	}
 
 	lower := strings.ToLower(model)
-	switch {
-	case strings.Contains(lower, "claude"):
-		return "anthropic", model
-	case strings.Contains(lower, "llama"):
-		return "meta", model
-	case strings.Contains(lower, "mistral"),
-		strings.Contains(lower, "mixtral"),
-		strings.Contains(lower, "codestral"):
-		return "mistralai", model
-	case strings.Contains(lower, "jamba"):
-		return "ai21", model
-	case strings.Contains(lower, "command"):
-		return "cohere", model
-	case strings.Contains(lower, "deepseek"):
-		return "deepseek-ai", model
-	case strings.Contains(lower, "qwen"):
-		return "qwen", model
+	for _, hint := range publisherSubstringHints {
+		if strings.Contains(lower, hint.substr) {
+			return hint.publisher, model
+		}
 	}
 	return "google", model
 }
 
-// openaiCompatPublishers enumerates the Vertex publishers that share the
-// OpenAI-compatible chat-completions body shape against
-// `:rawPredict` / `:streamRawPredict`.
-var openaiCompatPublishers = map[string]bool{
-	"meta":        true, // Llama 3.x / 4 (MaaS)
-	"mistralai":   true, // Mistral Large, Codestral, Mixtral
-	"ai21":        true, // Jamba 1.5 / 2.x
-	"deepseek-ai": true, // DeepSeek
-	"qwen":        true, // Qwen
-	"nvidia":      true, // Nvidia-hosted MaaS models
+// isKnownPublisher reports whether name is a publisher namespace the gateway
+// recognizes (has a registry entry).
+func isKnownPublisher(name string) bool {
+	_, ok := publisherRegistry[name]
+	return ok
+}
+
+// isOpenAICompatPublisher reports whether a publisher uses the shared
+// OpenAI-compatible chat-completions adapter.
+func isOpenAICompatPublisher(publisher string) bool {
+	info, ok := publisherRegistry[publisher]
+	return ok && info.kind == adapterOpenAICompat
 }
 
 // errUnsupportedPublisher is returned by Generate/GenerateStream when the
@@ -234,18 +306,40 @@ func (vc *VertexClient) GenerateStream(ctx context.Context, modelName string, sy
 	opts = ApplyOutputCaps(opts)
 	// Compression pipeline. Order is load-bearing — see comment in
 	// applyCompressionPipeline for the rationale.
-	contents, systemPrompt = applyCompressionPipeline(contents, systemPrompt)
+	contents, systemPrompt = applyCompressionPipeline(contents, systemPrompt, modelName)
 	switch {
 	case publisher == "anthropic":
 		return vc.anthropicGenerateStream(ctx, modelID, systemPrompt, contents, opts)
 	case publisher == "cohere":
 		return vc.cohereGenerateStream(ctx, modelID, systemPrompt, contents, opts)
-	case openaiCompatPublishers[publisher]:
+	case isOpenAICompatPublisher(publisher):
 		return vc.openaiGenerateStream(ctx, publisher, modelID, systemPrompt, contents, opts)
+
 	case publisher == "google":
 		config := vc.GetConfig(systemPrompt, opts)
+		// Explicit Gemini prompt caching (CachedContent). The shared planner
+		// decides whether the system+tools prefix is worth caching; this is a
+		// best-effort no-op when it isn't (or on any error).
+		plan := PlanCache(contents, strings.TrimSpace(systemPrompt), "google")
+		vc.MaybeApplyGeminiCache(ctx, modelName, strings.TrimSpace(systemPrompt), contents, config, plan)
 		fullName := FormatModelName(modelName)
-		return vc.client.Models.GenerateContentStream(ctx, fullName, contents, config)
+		DebugLogPayload(ctx, "upstream_request", map[string]any{
+			"model":    fullName,
+			"contents": contents,
+			"config":   config,
+		})
+		stream := vc.client.Models.GenerateContentStream(ctx, fullName, contents, config)
+
+		return func(yield func(*genai.GenerateContentResponse, error) bool) {
+			for chunk, err := range stream {
+				if err == nil {
+					DebugLogPayload(ctx, "upstream_response_chunk", chunk)
+				}
+				if !yield(chunk, err) {
+					return
+				}
+			}
+		}
 	default:
 		// Fail fast with a clear message rather than letting the SDK return
 		// the misleading "is not servable in region global" error.
@@ -259,37 +353,49 @@ func (vc *VertexClient) GenerateStream(ctx context.Context, modelName string, sy
 func (vc *VertexClient) Generate(ctx context.Context, modelName string, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) (*genai.GenerateContentResponse, error) {
 	publisher, modelID := ParsePublisher(modelName)
 	opts = ApplyOutputCaps(opts) // see GenerateStream for rationale.
-	contents, systemPrompt = applyCompressionPipeline(contents, systemPrompt)
+	contents, systemPrompt = applyCompressionPipeline(contents, systemPrompt, modelName)
 	switch {
 	case publisher == "anthropic":
 		return vc.anthropicGenerate(ctx, modelID, systemPrompt, contents, opts)
 	case publisher == "cohere":
 		return vc.cohereGenerate(ctx, modelID, systemPrompt, contents, opts)
-	case openaiCompatPublishers[publisher]:
+	case isOpenAICompatPublisher(publisher):
 		return vc.openaiGenerate(ctx, publisher, modelID, systemPrompt, contents, opts)
+
 	case publisher == "google":
 		config := vc.GetConfig(systemPrompt, opts)
 		fullName := FormatModelName(modelName)
-		return vc.client.Models.GenerateContent(ctx, fullName, contents, config)
+		DebugLogPayload(ctx, "upstream_request", map[string]any{
+			"model":    fullName,
+			"contents": contents,
+			"config":   config,
+		})
+		resp, err := vc.client.Models.GenerateContent(ctx, fullName, contents, config)
+		if err == nil {
+			DebugLogPayload(ctx, "upstream_response", resp)
+		}
+		return resp, err
 	default:
 		return nil, errUnsupportedPublisher(publisher, modelID)
 	}
 }
 
+// supportedPublishers is the discoverable subset of publisherRegistry — the
+// namespaces /api/tags fans out across. Derived from the registry so the list
+// stays in sync automatically. Order is normalized for deterministic logs.
+var supportedPublishers = discoverablePublishers()
 
-
-// supportedPublishers enumerates the publisher namespaces we attempt to list.
-// Order doesn't matter; results are merged and deduplicated.
-var supportedPublishers = []string{
-	"google",
-	"anthropic",
-	"meta",
-	"mistralai",
-	"ai21",
-	"cohere",
-	"deepseek-ai",
-	"qwen",
-	"nvidia",
+// discoverablePublishers extracts and sorts the publisher namespaces marked
+// discoverable in publisherRegistry.
+func discoverablePublishers() []string {
+	out := make([]string, 0, len(publisherRegistry))
+	for name, info := range publisherRegistry {
+		if info.discoverable {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ListModels returns the union of models exposed by Vertex AI across all
@@ -478,14 +584,14 @@ func (vc *VertexClient) getModelsFromEndpoint(ctx context.Context, url string) (
 	}
 
 	var payload struct {
-		PublisherModels []map[string]interface{} `json:"publisherModels"`
-		Models          []map[string]interface{} `json:"models"`
+		PublisherModels []map[string]any `json:"publisherModels"`
+		Models          []map[string]any `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	rawEntries := append([]map[string]interface{}{}, payload.PublisherModels...)
+	rawEntries := append([]map[string]any{}, payload.PublisherModels...)
 	rawEntries = append(rawEntries, payload.Models...)
 
 	var out []*genai.Model
@@ -506,8 +612,8 @@ func (vc *VertexClient) getModelsFromEndpoint(ctx context.Context, url string) (
 // "launchStage"/"supportedGenerationMethods" hints from a raw model payload.
 // When the field is absent we leave SupportedActions empty and let
 // isChatModel() apply heuristic fall-backs.
-func extractSupportedActions(m map[string]interface{}) []string {
-	if v, ok := m["supportedActions"].([]interface{}); ok {
+func extractSupportedActions(m map[string]any) []string {
+	if v, ok := m["supportedActions"].([]any); ok {
 		var acts []string
 		for _, x := range v {
 			if s, ok := x.(string); ok {
@@ -516,7 +622,7 @@ func extractSupportedActions(m map[string]interface{}) []string {
 		}
 		return acts
 	}
-	if v, ok := m["supportedGenerationMethods"].([]interface{}); ok {
+	if v, ok := m["supportedGenerationMethods"].([]any); ok {
 		var acts []string
 		for _, x := range v {
 			if s, ok := x.(string); ok {

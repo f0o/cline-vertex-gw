@@ -375,10 +375,32 @@ func buildOpenAIRequest(modelID, systemPrompt string, contents []*genai.Content,
 }
 
 // openaiUsage matches the `usage` field on chat-completions responses.
+//
+// PromptTokensDetails.CachedTokens surfaces IMPLICIT prompt-cache hits that
+// OpenAI-compatible publishers (notably DeepSeek) report when a stable prefix
+// was served from their automatic cache. We cannot place cache breakpoints on
+// these providers, but we DO surface the cached-token count so operators can
+// measure cache effectiveness across every publisher uniformly.
 type openaiUsage struct {
-	PromptTokens     int32 `json:"prompt_tokens"`
-	CompletionTokens int32 `json:"completion_tokens"`
-	TotalTokens      int32 `json:"total_tokens"`
+	PromptTokens        int32                      `json:"prompt_tokens"`
+	CompletionTokens    int32                      `json:"completion_tokens"`
+	TotalTokens         int32                      `json:"total_tokens"`
+	PromptTokensDetails *openaiPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// openaiPromptTokensDetails carries the cached-token breakdown some
+// OpenAI-compatible providers include under `usage.prompt_tokens_details`.
+type openaiPromptTokensDetails struct {
+	CachedTokens int32 `json:"cached_tokens"`
+}
+
+// cachedTokens returns the implicit-cache read count, or 0 when the provider
+// did not report a breakdown.
+func (u openaiUsage) cachedTokens() int32 {
+	if u.PromptTokensDetails != nil {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return 0
 }
 
 // openaiResponseToolCall is one tool call as returned in a non-streaming
@@ -401,9 +423,9 @@ type openaiResponseMessage struct {
 // index carries `id` + `function.name`, subsequent chunks for the same
 // index append to `function.arguments`. We accumulate per-index.
 type openaiResponseChoiceDelta struct {
-	Role      string                       `json:"role,omitempty"`
-	Content   string                       `json:"content,omitempty"`
-	ToolCalls []openaiStreamToolCallDelta  `json:"tool_calls,omitempty"`
+	Role      string                      `json:"role,omitempty"`
+	Content   string                      `json:"content,omitempty"`
+	ToolCalls []openaiStreamToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 // openaiStreamToolCallDelta is one entry in a streaming tool_calls delta.
@@ -483,6 +505,7 @@ func openaiToolCallsToGenaiParts(calls []openaiResponseToolCall) []*genai.Part {
 // adapts the response into a *genai.GenerateContentResponse.
 func (vc *VertexClient) openaiGenerate(ctx context.Context, publisher, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) (*genai.GenerateContentResponse, error) {
 	body := buildOpenAIRequest(modelID, systemPrompt, contents, opts, false)
+	DebugLogPayload(ctx, "upstream_request", body)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal body: %w", publisher, err)
@@ -514,6 +537,7 @@ func (vc *VertexClient) openaiGenerate(ctx context.Context, publisher, modelID, 
 	if err := json.NewDecoder(resp.Body).Decode(&oresp); err != nil {
 		return nil, fmt.Errorf("%s: decode: %w", publisher, err)
 	}
+	DebugLogPayload(ctx, "upstream_response", oresp)
 
 	var (
 		text      string
@@ -555,6 +579,9 @@ func (vc *VertexClient) openaiGenerate(ctx context.Context, publisher, modelID, 
 			PromptTokenCount:     oresp.Usage.PromptTokens,
 			CandidatesTokenCount: oresp.Usage.CompletionTokens,
 			TotalTokenCount:      oresp.Usage.TotalTokens,
+			// Surface implicit prompt-cache hits (e.g. DeepSeek) so cache ROI
+			// is measurable across every publisher, not just Anthropic/Gemini.
+			CachedContentTokenCount: oresp.Usage.cachedTokens(),
 		},
 	}, nil
 }
@@ -563,10 +590,10 @@ func (vc *VertexClient) openaiGenerate(ctx context.Context, publisher, modelID, 
 // chunks. OpenAI's stream sends the id + function name on the first delta
 // (per index), then appends to function.arguments on subsequent deltas.
 type inflightOAIToolCall struct {
-	index    int
-	id       string
-	name     string
-	argsBuf  strings.Builder
+	index   int
+	id      string
+	name    string
+	argsBuf strings.Builder
 }
 
 // openaiGenerateStream streams an OpenAI-compatible completion and yields
@@ -577,6 +604,7 @@ type inflightOAIToolCall struct {
 func (vc *VertexClient) openaiGenerateStream(ctx context.Context, publisher, modelID, systemPrompt string, contents []*genai.Content, opts *GenerationOptions) iter.Seq2[*genai.GenerateContentResponse, error] {
 	return func(yield func(*genai.GenerateContentResponse, error) bool) {
 		body := buildOpenAIRequest(modelID, systemPrompt, contents, opts, true)
+		DebugLogPayload(ctx, "upstream_request", body)
 		payload, err := json.Marshal(body)
 		if err != nil {
 			yield(nil, fmt.Errorf("%s: marshal body: %w", publisher, err))
@@ -614,6 +642,7 @@ func (vc *VertexClient) openaiGenerateStream(ctx context.Context, publisher, mod
 			promptTokens  int32
 			outputTokens  int32
 			totalTokens   int32
+			cachedTokens  int32
 			finishR       string
 			inflightTools = map[int]*inflightOAIToolCall{}
 			sawToolCall   bool
@@ -686,6 +715,7 @@ func (vc *VertexClient) openaiGenerateStream(ctx context.Context, publisher, mod
 			if data == "" || data == "[DONE]" {
 				continue
 			}
+			DebugLogPayload(ctx, "upstream_response_chunk", json.RawMessage(data))
 
 			var ev openaiStreamChunk
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
@@ -706,7 +736,11 @@ func (vc *VertexClient) openaiGenerateStream(ctx context.Context, publisher, mod
 				if ev.Usage.TotalTokens > 0 {
 					totalTokens = ev.Usage.TotalTokens
 				}
+				if c := ev.Usage.cachedTokens(); c > 0 {
+					cachedTokens = c
+				}
 			}
+
 			if len(ev.Choices) == 0 {
 				continue
 			}
@@ -777,11 +811,13 @@ func (vc *VertexClient) openaiGenerateStream(ctx context.Context, publisher, mod
 				FinishReason: finish,
 			}},
 			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-				PromptTokenCount:     promptTokens,
-				CandidatesTokenCount: outputTokens,
-				TotalTokenCount:      totalTokens,
+				PromptTokenCount:        promptTokens,
+				CandidatesTokenCount:    outputTokens,
+				TotalTokenCount:         totalTokens,
+				CachedContentTokenCount: cachedTokens,
 			},
 		}
 		yield(final, nil)
+
 	}
 }

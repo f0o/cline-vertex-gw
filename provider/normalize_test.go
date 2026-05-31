@@ -203,7 +203,7 @@ func TestEnvBool_KnownValues(t *testing.T) {
 		{"GW_TEST_X3", "ON", false, true},
 		{"GW_TEST_X4", "0", true, false},
 		{"GW_TEST_X5", "OFF", true, false},
-		{"GW_TEST_X6", "garbage", true, true},  // garbage -> default
+		{"GW_TEST_X6", "garbage", true, true},   // garbage -> default
 		{"GW_TEST_X7", "garbage", false, false}, // garbage -> default
 		{"GW_TEST_X8", "", true, true},          // unset -> default
 	}

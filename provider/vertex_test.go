@@ -11,28 +11,28 @@ func TestParsePublisher(t *testing.T) {
 	}{
 		// already-qualified resource paths
 		{"qualified anthropic", "publishers/anthropic/models/claude-opus-4-7", "anthropic", "claude-opus-4-7"},
-		{"qualified google",    "publishers/google/models/gemini-2.0-flash",   "google",    "gemini-2.0-flash"},
-		{"qualified meta",      "publishers/meta/models/llama-3.3-70b-instruct-maas", "meta", "llama-3.3-70b-instruct-maas"},
+		{"qualified google", "publishers/google/models/gemini-2.0-flash", "google", "gemini-2.0-flash"},
+		{"qualified meta", "publishers/meta/models/llama-3.3-70b-instruct-maas", "meta", "llama-3.3-70b-instruct-maas"},
 
 		// prefixed short ids
-		{"prefixed anthropic", "anthropic/claude-opus-4-7",      "anthropic",   "claude-opus-4-7"},
-		{"prefixed mistralai", "mistralai/mistral-large-2411",   "mistralai",   "mistral-large-2411"},
-		{"prefixed deepseek",  "deepseek-ai/deepseek-v3",        "deepseek-ai", "deepseek-v3"},
+		{"prefixed anthropic", "anthropic/claude-opus-4-7", "anthropic", "claude-opus-4-7"},
+		{"prefixed mistralai", "mistralai/mistral-large-2411", "mistralai", "mistral-large-2411"},
+		{"prefixed deepseek", "deepseek-ai/deepseek-v3", "deepseek-ai", "deepseek-v3"},
 
 		// bare short ids — heuristic by substring
-		{"bare claude",   "claude-opus-4-7",            "anthropic",   "claude-opus-4-7"},
-		{"bare llama",    "llama-3.3-70b-instruct",     "meta",        "llama-3.3-70b-instruct"},
-		{"bare mistral",  "mistral-large-2411",         "mistralai",   "mistral-large-2411"},
-		{"bare mixtral",  "mixtral-8x22b",              "mistralai",   "mixtral-8x22b"},
-		{"bare codestral","codestral-2405",             "mistralai",   "codestral-2405"},
-		{"bare jamba",    "jamba-1.5-large",            "ai21",        "jamba-1.5-large"},
-		{"bare command",  "cohere-command-r-plus",      "cohere",      "cohere-command-r-plus"},
-		{"bare deepseek", "deepseek-v3",                "deepseek-ai", "deepseek-v3"},
-		{"bare qwen",     "qwen-2.5-72b",               "qwen",        "qwen-2.5-72b"},
+		{"bare claude", "claude-opus-4-7", "anthropic", "claude-opus-4-7"},
+		{"bare llama", "llama-3.3-70b-instruct", "meta", "llama-3.3-70b-instruct"},
+		{"bare mistral", "mistral-large-2411", "mistralai", "mistral-large-2411"},
+		{"bare mixtral", "mixtral-8x22b", "mistralai", "mixtral-8x22b"},
+		{"bare codestral", "codestral-2405", "mistralai", "codestral-2405"},
+		{"bare jamba", "jamba-1.5-large", "ai21", "jamba-1.5-large"},
+		{"bare command", "cohere-command-r-plus", "cohere", "cohere-command-r-plus"},
+		{"bare deepseek", "deepseek-v3", "deepseek-ai", "deepseek-v3"},
+		{"bare qwen", "qwen-2.5-72b", "qwen", "qwen-2.5-72b"},
 
 		// defaults / unknown → google
-		{"bare gemini",   "gemini-2.0-flash",           "google",      "gemini-2.0-flash"},
-		{"unknown",       "some-random-model",          "google",      "some-random-model"},
+		{"bare gemini", "gemini-2.0-flash", "google", "gemini-2.0-flash"},
+		{"unknown", "some-random-model", "google", "some-random-model"},
 
 		// Versioned id with dot in head: the dot-check skips the explicit
 		// publisher-prefix branch, but the substring heuristic still routes
@@ -58,10 +58,10 @@ func TestFormatModelName(t *testing.T) {
 		in, want string
 	}{
 		{"publishers/anthropic/models/claude-opus-4-7", "publishers/anthropic/models/claude-opus-4-7"},
-		{"gemini-2.0-flash",                            "gemini-2.0-flash"},
-		{"claude-opus-4-7",                             "publishers/anthropic/models/claude-opus-4-7"},
-		{"llama-3.3-70b-instruct",                      "publishers/meta/models/llama-3.3-70b-instruct"},
-		{"mistral-large-2411",                          "publishers/mistralai/models/mistral-large-2411"},
+		{"gemini-2.0-flash", "gemini-2.0-flash"},
+		{"claude-opus-4-7", "publishers/anthropic/models/claude-opus-4-7"},
+		{"llama-3.3-70b-instruct", "publishers/meta/models/llama-3.3-70b-instruct"},
+		{"mistral-large-2411", "publishers/mistralai/models/mistral-large-2411"},
 	}
 	for _, tt := range tests {
 		if got := FormatModelName(tt.in); got != tt.want {
@@ -72,13 +72,13 @@ func TestFormatModelName(t *testing.T) {
 
 func TestMapRole(t *testing.T) {
 	tests := []struct{ in, want string }{
-		{"user",      "user"},
-		{"USER",      "user"},
+		{"user", "user"},
+		{"USER", "user"},
 		{"assistant", "model"},
 		{"Assistant", "model"},
-		{"system",    ""},     // system is hoisted out separately
-		{"tool",      "user"}, // unknown → user
-		{"",          "user"},
+		{"system", ""},   // system is hoisted out separately
+		{"tool", "user"}, // unknown → user
+		{"", "user"},
 	}
 	for _, tt := range tests {
 		if got := MapRole(tt.in); got != tt.want {
