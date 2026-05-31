@@ -57,7 +57,7 @@ import (
 // free to call on every chat request.
 
 // hasInlineImageParts reports whether any Content in the slice carries at
-// least one InlineData (image) part. The compression pipeline preserves
+// least one InlineData part. The compression pipeline preserves
 // these unchanged, so this check works equally well before or after the
 // pipeline runs.
 func hasInlineImageParts(contents []*genai.Content) bool {
@@ -70,6 +70,23 @@ func hasInlineImageParts(contents []*genai.Content) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// publisherSupportsMIME reports whether the given (publisher, model) combination
+// supports a specific MIME type on Vertex AI.
+func publisherSupportsMIME(publisher, modelID, mime string) bool {
+	if strings.HasPrefix(mime, "image/") {
+		return publisherSupportsVision(publisher, modelID)
+	}
+	if mime == "application/pdf" {
+		// Only Google and Anthropic support PDF natively on Vertex AI.
+		return publisher == "google" || publisher == "anthropic"
+	}
+	if strings.HasPrefix(mime, "audio/") || strings.HasPrefix(mime, "video/") {
+		// Only Google supports audio and video natively on Vertex AI.
+		return publisher == "google"
 	}
 	return false
 }
@@ -120,14 +137,15 @@ func publisherSupportsVision(publisher, modelID string) bool {
 	}
 }
 
-// CheckVisionSupport validates that the request's image attachments are
-// acceptable for the chosen model. It is intended to be called from the
-// HTTP handler layer AFTER buildContents* has produced the final Content
-// slice — so it sees the post-decode form (InlineData parts populated).
+// CheckVisionSupport validates that the request's inline media attachments
+// (images, audio, video, documents) are acceptable for the chosen model.
+// It is intended to be called from the HTTP handler layer AFTER buildContents*
+// has produced the final Content slice — so it sees the post-decode form
+// (InlineData parts populated).
 //
 // Returns nil when:
-//   - the request has no image parts, OR
-//   - the resolved publisher/model is known to accept image inputs.
+//   - the request has no inline media parts, OR
+//   - the resolved publisher/model supports all of the attached MIME types.
 //
 // Returns a clear error otherwise. Handlers should map this to HTTP 400.
 func CheckVisionSupport(modelName string, contents []*genai.Content) error {
@@ -135,12 +153,30 @@ func CheckVisionSupport(modelName string, contents []*genai.Content) error {
 		return nil
 	}
 	publisher, modelID := ParsePublisher(modelName)
-	if publisherSupportsVision(publisher, modelID) {
+	var unsupportedMimes []string
+
+	for _, c := range contents {
+		if c == nil {
+			continue
+		}
+		for _, p := range c.Parts {
+			if p != nil && p.InlineData != nil {
+				mime := p.InlineData.MIMEType
+				if !publisherSupportsMIME(publisher, modelID, mime) {
+					unsupportedMimes = append(unsupportedMimes, mime)
+				}
+			}
+		}
+	}
+
+	if len(unsupportedMimes) == 0 {
 		return nil
 	}
+
+	unsupportedList := strings.Join(unsupportedMimes, ", ")
 	return fmt.Errorf(
-		"model %q (publisher=%q) does not support image inputs on Vertex AI; "+
-			"use a vision-capable model instead — e.g. gemini-2.0-flash, "+
+		"model %q (publisher=%q) does not support media inputs [%s] on Vertex AI; "+
+			"use a vision-capable or multimodal-capable model instead — e.g. gemini-2.0-flash, "+
 			"claude-3-5-sonnet, llama-3.2-90b-vision-instruct-maas, or pixtral-12b",
-		modelName, publisher)
+		modelName, publisher, unsupportedList)
 }

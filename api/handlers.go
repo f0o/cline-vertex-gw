@@ -357,7 +357,7 @@ func (h *APIHandler) runNonStreamWithRetry(
 func buildContents(messages []Message) (contents []*genai.Content, systemPrompt string, err error) {
 	var lastRole string
 	var currentParts []*genai.Part
-	totalImageBytesSeen := 0
+	totalMediaBytesSeen := 0
 
 	flush := func() {
 		if lastRole != "" && len(currentParts) > 0 {
@@ -389,10 +389,10 @@ func buildContents(messages []Message) (contents []*genai.Content, systemPrompt 
 			if derr != nil {
 				return nil, "", fmt.Errorf("message %d image %d: %w", msgIdx, i, derr)
 			}
-			totalImageBytesSeen += len(data)
-			if totalImageBytesSeen > maxImageBytesPerRequest {
-				return nil, "", fmt.Errorf("request image payload exceeds %d bytes (GW_MAX_IMAGE_BYTES_PER_REQUEST)",
-					maxImageBytesPerRequest)
+			totalMediaBytesSeen += len(data)
+			if totalMediaBytesSeen > maxMediaBytesPerRequest {
+				return nil, "", fmt.Errorf("request media payload exceeds %d bytes (GW_MAX_MEDIA_BYTES_PER_REQUEST)",
+					maxMediaBytesPerRequest)
 			}
 			msgParts = append(msgParts, &genai.Part{
 				InlineData: &genai.Blob{MIMEType: mime, Data: data},

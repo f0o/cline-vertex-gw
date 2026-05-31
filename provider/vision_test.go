@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -152,6 +153,43 @@ func TestCheckVisionSupport_RejectsTextOnlyModels(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "vision-capable") {
 				t.Errorf("error does not suggest alternatives: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckVisionSupport_MIMETypes(t *testing.T) {
+	cases := []struct {
+		model    string
+		mime     string
+		wantPass bool
+	}{
+		{"gemini-2.0-flash", "image/png", true},
+		{"gemini-2.0-flash", "audio/wav", true},
+		{"gemini-2.0-flash", "video/mp4", true},
+		{"gemini-2.0-flash", "application/pdf", true},
+
+		{"claude-3-5-sonnet", "image/png", true},
+		{"claude-3-5-sonnet", "application/pdf", true},
+		{"claude-3-5-sonnet", "audio/wav", false},
+		{"claude-3-5-sonnet", "video/mp4", false},
+
+		{"llama-3.2-11b-vision-instruct", "image/png", true},
+		{"llama-3.2-11b-vision-instruct", "application/pdf", false},
+		{"llama-3.2-11b-vision-instruct", "audio/wav", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s-%s", tc.model, tc.mime), func(t *testing.T) {
+			in := []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{
+				{InlineData: &genai.Blob{MIMEType: tc.mime, Data: []byte("fake content")}},
+			}}}
+			err := CheckVisionSupport(tc.model, in)
+			if tc.wantPass && err != nil {
+				t.Errorf("expected pass, got error: %v", err)
+			}
+			if !tc.wantPass && err == nil {
+				t.Errorf("expected failure, got pass")
 			}
 		})
 	}

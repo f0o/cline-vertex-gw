@@ -325,14 +325,23 @@ turn. Shipping the same 800 KB screenshot 5 times across a session costs
 
 **Limits and safety:**
 
-- Only `image/png`, `image/jpeg`, `image/webp`, `image/gif` are accepted.
-  Other MIME types (SVG, TIFF, BMP) return 400.
-- Only `data:` URLs are accepted — `https://…` references are rejected as
+- Fully supports multimodal inputs including **Images, Audio, Video, and PDF Documents**.
+  - **Images**: `image/png`, `image/jpeg`, `image/webp`, `image/gif`.
+  - **Audio**: `audio/wav`, `audio/mp3`/`mpeg`, `audio/flac`, `audio/ogg`, `audio/aac`, `audio/webm`, `audio/mp4`, `audio/m4a`, `audio/opus`.
+  - **Video**: `video/mp4`, `video/webm`, `video/quicktime`/`mov`, `video/mpeg`, `video/x-msvideo`/`avi`, `video/x-flv`, `video/3gpp`, `video/ogg`.
+  - **Documents**: `application/pdf`.
+- Supports OpenAI-compatible polymorphic inputs (e.g., standard `image_url` data URLs or explicit `input_audio` objects).
+- Only `data:` URLs and bare base64 are accepted — `https://…` references are rejected as
   an SSRF guard. The gateway never makes outbound HTTP requests to fetch
   user-supplied URLs.
-- Per-image and per-request size caps apply (`GW_MAX_IMAGE_BYTES_PER_PART`
-  default 10 MiB, `GW_MAX_IMAGE_BYTES_PER_REQUEST` default 32 MiB).
-- Images attached to `system`, `developer`, or `tool` messages are
+- Per-media size caps apply globally to all media formats (images, audio, video, PDF):
+  - `GW_MAX_MEDIA_BYTES_PER_PART` (default 10 MiB)
+  - `GW_MAX_MEDIA_BYTES_PER_REQUEST` (default 32 MiB)
+- Gating and capabilities:
+  - **Google (Gemini/Gemma-3)**: Supports all media types natively (images, audio, video, PDF).
+  - **Anthropic (Claude 3/3.5)**: Supports images and PDF documents natively. Non-image parts (like PDF) are automatically translated into Claude's native messages `document` block structure. Audio/video are rejected at the gate.
+  - **Meta (Llama-3.2/4-vision), Mistral (Pixtral), Qwen (Qwen-VL), Nvidia**: Support only images. Other media types are rejected at the gateway's capability gate with a helpful alternative recommendation.
+- Media attached to `system`, `developer`, or `tool` messages are
   silently dropped (no upstream supports them as system/tool context).
 - The `/api/generate` endpoint doesn't support multimodal at all — use
   `/api/chat` or `/v1/chat/completions`.
@@ -378,8 +387,8 @@ All configuration is via environment variables.
 | `LOG_FORMAT` | `json` | `json` (structured, for aggregators) or `text` (human-readable). |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `GW_TAGS_CACHE_TTL_SEC` | `60` | TTL for the in-memory `/api/tags` and `/v1/models` cache. Cline's model picker polls this endpoint aggressively; caching cuts the fan-out across nine publishers down to once per minute. Set to `0` to disable. |
-| `GW_MAX_IMAGE_BYTES_PER_PART` | `10485760` (10 MiB) | Per-image size cap on the **decoded** bytes. Requests with a larger image return a 400 with a clear error pointing at this knob. Tightens an attack surface (a 100 MB inline base64 blob is ~75 MB of memory). |
-| `GW_MAX_IMAGE_BYTES_PER_REQUEST` | `33554432` (32 MiB) | Aggregate cap across **all** decoded images in a single request. Trips on the cumulative total, not per-part. |
+| `GW_MAX_MEDIA_BYTES_PER_PART` | `10485760` (10 MiB) | Per-media (images, audio, video, PDF) size cap on the **decoded** bytes. Requests with a larger file return a 400. |
+| `GW_MAX_MEDIA_BYTES_PER_REQUEST` | `33554432` (32 MiB) | Aggregate cap across **all** decoded media in a single request. |
 | `GW_PRICING` | `on` | Cost estimation toggle. When on, the gateway scrapes per-token prices live from the GCP **Cloud Billing Catalog API** and prints a per-request USD breakdown alongside the request stats (and feeds the `cline_vertex_gw_estimated_cost_usd_total` metric). Set to `off`/`false`/`0` to disable all pricing scrapes and cost output. |
 | `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Refresh interval for the live pricing table. Prices change on the order of months, so the catalog is scraped at most once per interval (warmed once at startup, then refreshed lazily in the background on request completion). |
 | `GW_PRICING_DEBUG` | `off` | When on, the pricing scrape logs a verbose diagnostic dump (`[pricing][debug]`): the matched/not-matched billing services, a per-SKU resolution trace, and the final per-model resolved rate table. Use it to verify or troubleshoot the SKU→model/rate mapping against your project's catalog. |

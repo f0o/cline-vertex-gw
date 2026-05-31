@@ -108,7 +108,7 @@ func (h *APIHandler) OpenAIModelsHandler(w http.ResponseWriter, r *http.Request)
 func buildContentsOAI(messages []OAIChatMessage) (contents []*genai.Content, systemPrompt string, err error) {
 	var lastRole string
 	var currentParts []*genai.Part
-	totalImageBytesSeen := 0
+	totalMediaBytesSeen := 0
 
 	flush := func() {
 		if lastRole != "" && len(currentParts) > 0 {
@@ -139,13 +139,16 @@ func buildContentsOAI(messages []OAIChatMessage) (contents []*genai.Content, sys
 			continue
 		}
 
-		// Per-request image-bytes cap. Counted across ALL messages, not
-		// just the current one, so a single oversized image plus several
-		// smaller ones still trips it.
-		totalImageBytesSeen += totalImageBytes(mparts)
-		if totalImageBytesSeen > maxImageBytesPerRequest {
-			return nil, "", fmt.Errorf("request image payload exceeds %d bytes (GW_MAX_IMAGE_BYTES_PER_REQUEST)",
-				maxImageBytesPerRequest)
+		// Per-request media-bytes cap. Counted across ALL messages, not
+		// just the current one.
+		for _, p := range mparts {
+			if !p.isText() {
+				totalMediaBytesSeen += len(p.Data)
+			}
+		}
+		if totalMediaBytesSeen > maxMediaBytesPerRequest {
+			return nil, "", fmt.Errorf("request media payload exceeds %d bytes (GW_MAX_MEDIA_BYTES_PER_REQUEST)",
+				maxMediaBytesPerRequest)
 		}
 
 		// Build the per-message parts list. mediaParts (text + image) go

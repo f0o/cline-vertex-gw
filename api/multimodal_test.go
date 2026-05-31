@@ -71,7 +71,7 @@ func TestParseDataURL_RejectsUnsupportedMIME(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for image/svg+xml; got nil")
 	}
-	if !strings.Contains(err.Error(), "unsupported image mime type") {
+	if !strings.Contains(err.Error(), "unsupported mime type") {
 		t.Errorf("error mentions unsupported type? got: %v", err)
 	}
 }
@@ -119,15 +119,15 @@ func TestParseDataURL_EmptyPayload(t *testing.T) {
 func TestParseDataURL_OversizedRejected(t *testing.T) {
 	// Just over the per-part cap. We use the magic bytes prefix so the
 	// payload is at least format-valid; the cap check comes first.
-	original := maxImageBytesPerPart
-	maxImageBytesPerPart = 32 // tighten for the test
-	defer func() { maxImageBytesPerPart = original }()
+	original := maxMediaBytesPerPart
+	maxMediaBytesPerPart = 32 // tighten for the test
+	defer func() { maxMediaBytesPerPart = original }()
 	oversized := append(append([]byte{}, pngMagic...), bytes.Repeat([]byte("A"), 64)...)
 	_, _, err := parseDataURL(dataURL("image/png", oversized))
 	if err == nil {
 		t.Fatal("expected per-part-cap rejection; got nil")
 	}
-	if !strings.Contains(err.Error(), "GW_MAX_IMAGE_BYTES_PER_PART") {
+	if !strings.Contains(err.Error(), "GW_MAX_MEDIA_BYTES_PER_PART") {
 		t.Errorf("error should reference the env knob; got: %v", err)
 	}
 }
@@ -246,7 +246,7 @@ func TestContentParts_RejectsMissingImageURL(t *testing.T) {
 func TestContentParts_SkipsUnknownTypes(t *testing.T) {
 	body := `[
 		{"type":"text","text":"keep"},
-		{"type":"input_audio","input_audio":{"data":"..."}},
+		{"type":"future_hypothetical_type","future_hypothetical_type":{"data":"..."}},
 		{"type":"text","text":"alsokeep"}
 	]`
 	m := OAIChatMessage{Content: json.RawMessage(body)}
@@ -256,6 +256,82 @@ func TestContentParts_SkipsUnknownTypes(t *testing.T) {
 	}
 	if len(parts) != 2 || parts[0].Text != "keep" || parts[1].Text != "alsokeep" {
 		t.Errorf("unknown-type parts not skipped cleanly: %+v", parts)
+	}
+}
+
+func TestContentParts_InputAudio(t *testing.T) {
+	audioB64 := base64.StdEncoding.EncodeToString([]byte("fake audio content"))
+	body := fmt.Sprintf(`[
+		{"type":"text","text":"listen to this"},
+		{"type":"input_audio","input_audio":{"data":"%s","format":"wav"}},
+		{"type":"input_audio","input_audio":{"data":"%s","format":"mp3"}}
+	]`, audioB64, audioB64)
+	m := OAIChatMessage{Content: json.RawMessage(body)}
+	parts, err := m.ContentParts()
+	if err != nil {
+		t.Fatalf("unexpected error parsing input_audio: %v", err)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(parts))
+	}
+	if parts[0].Text != "listen to this" {
+		t.Errorf("expected first part to be text, got %+v", parts[0])
+	}
+	if parts[1].MIME != "audio/wav" || string(parts[1].Data) != "fake audio content" {
+		t.Errorf("expected second part to be audio/wav, got %+v", parts[1])
+	}
+	if parts[2].MIME != "audio/mpeg" || string(parts[2].Data) != "fake audio content" {
+		t.Errorf("expected third part to be audio/mpeg (mapped from mp3), got %+v", parts[2])
+	}
+}
+
+func TestSniffMediaMIME(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		{"pdf", []byte("%PDF-1.4\n..."), "application/pdf"},
+		{"wav", []byte("RIFF\x24\x00\x00\x00WAVEfmt ..."), "audio/wav"},
+		{"flac", []byte("fLaC\x00\x00\x00\x22..."), "audio/flac"},
+		{"ogg", []byte("OggS\x00..."), "audio/ogg"},
+		{"mp3-id3", []byte("ID3\x03\x00..."), "audio/mp3"},
+		{"mp3-sync", []byte("\xFF\xFB\x90\x44..."), "audio/mp3"},
+		{"mp4", []byte("\x00\x00\x00\x18ftypmp42..."), "video/mp4"},
+		{"webm", []byte("\x1A\x45\xDF\xA3\x01..."), "video/webm"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sniffMediaMIME(tc.in); got != tc.want {
+				t.Errorf("sniffMediaMIME(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseDataURL_AllMediaTypes(t *testing.T) {
+	for _, tc := range []struct {
+		mime string
+		data []byte
+	}{
+		{"audio/wav", []byte("fake wav")},
+		{"audio/mpeg", []byte("fake mp3")},
+		{"video/mp4", []byte("fake mp4")},
+		{"application/pdf", []byte("fake pdf")},
+	} {
+		t.Run(tc.mime, func(t *testing.T) {
+			u := "data:" + tc.mime + ";base64," + base64.StdEncoding.EncodeToString(tc.data)
+			gotMime, gotData, err := parseDataURL(u)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotMime != tc.mime {
+				t.Errorf("mime = %q, want %q", gotMime, tc.mime)
+			}
+			if !bytes.Equal(gotData, tc.data) {
+				t.Errorf("data mismatch: got %q, want %q", gotData, tc.data)
+			}
+		})
 	}
 }
 

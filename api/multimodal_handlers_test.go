@@ -55,9 +55,9 @@ func TestBuildContents_OllamaImagesField_BadBytes(t *testing.T) {
 }
 
 func TestBuildContents_OllamaImagesField_RespectsPerRequestCap(t *testing.T) {
-	prev := maxImageBytesPerRequest
-	maxImageBytesPerRequest = 5 // ridiculously tight for the test
-	defer func() { maxImageBytesPerRequest = prev }()
+	prev := maxMediaBytesPerRequest
+	maxMediaBytesPerRequest = 5 // ridiculously tight for the test
+	defer func() { maxMediaBytesPerRequest = prev }()
 	msgs := []Message{{
 		Role:    "user",
 		Content: "x",
@@ -67,7 +67,7 @@ func TestBuildContents_OllamaImagesField_RespectsPerRequestCap(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected per-request cap rejection")
 	}
-	if !strings.Contains(err.Error(), "GW_MAX_IMAGE_BYTES_PER_REQUEST") {
+	if !strings.Contains(err.Error(), "GW_MAX_MEDIA_BYTES_PER_REQUEST") {
 		t.Errorf("error should reference the env knob: %v", err)
 	}
 }
@@ -126,9 +126,9 @@ func TestBuildContentsOAI_BadImageReturnsError(t *testing.T) {
 }
 
 func TestBuildContentsOAI_PerRequestImageCap(t *testing.T) {
-	prev := maxImageBytesPerRequest
-	maxImageBytesPerRequest = 5
-	defer func() { maxImageBytesPerRequest = prev }()
+	prev := maxMediaBytesPerRequest
+	maxMediaBytesPerRequest = 5
+	defer func() { maxMediaBytesPerRequest = prev }()
 	body := fmt.Sprintf(
 		`[{"type":"image_url","image_url":{"url":"%s"}}]`,
 		dataURL("image/png", pngMagic),
@@ -138,7 +138,7 @@ func TestBuildContentsOAI_PerRequestImageCap(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected per-request image cap rejection")
 	}
-	if !strings.Contains(err.Error(), "GW_MAX_IMAGE_BYTES_PER_REQUEST") {
+	if !strings.Contains(err.Error(), "GW_MAX_MEDIA_BYTES_PER_REQUEST") {
 		t.Errorf("error should reference env knob: %v", err)
 	}
 }

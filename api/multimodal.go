@@ -42,22 +42,78 @@ import (
 // from the gateway turns it into an SSRF vector. Add `GW_ALLOW_IMAGE_URL_HTTP`
 // later if a real caller asks.
 
-// Per-image / per-request size guards. Defaults are roomy enough for any
-// realistic Cline screenshot but tight enough to bound memory.
+// Per-media size guards (which cover images, audio, video, PDF). Defaults are roomy enough
+// for any realistic Cline screenshot but tight enough to bound memory.
 var (
-	maxImageBytesPerPart    = envIntDefault("GW_MAX_IMAGE_BYTES_PER_PART", 10*1024*1024)
-	maxImageBytesPerRequest = envIntDefault("GW_MAX_IMAGE_BYTES_PER_REQUEST", 32*1024*1024)
+	maxMediaBytesPerPart    = envIntDefault("GW_MAX_MEDIA_BYTES_PER_PART", 10*1024*1024)
+	maxMediaBytesPerRequest = envIntDefault("GW_MAX_MEDIA_BYTES_PER_REQUEST", 32*1024*1024)
 )
 
 // supportedImageMIMETypes is the allowlist of MIME types we accept inline.
-// Anything outside this set is rejected at the API boundary so we don't
-// hand a "image/svg+xml" or "image/x-tiff" payload to an upstream that
-// will silently 400 mid-stream.
 var supportedImageMIMETypes = map[string]struct{}{
 	"image/png":  {},
 	"image/jpeg": {},
 	"image/webp": {},
 	"image/gif":  {},
+}
+
+// supportedAudioMIMETypes is the allowlist of audio MIME types we accept inline.
+var supportedAudioMIMETypes = map[string]struct{}{
+	"audio/wav":     {},
+	"audio/x-wav":   {},
+	"audio/mp3":     {},
+	"audio/mpeg":    {},
+	"audio/mpeg3":   {},
+	"audio/x-mpeg3": {},
+	"audio/ogg":     {},
+	"audio/flac":    {},
+	"audio/aac":     {},
+	"audio/webm":    {},
+	"audio/mp4":     {},
+	"audio/m4a":     {},
+	"audio/x-m4a":   {},
+	"audio/opus":    {},
+}
+
+// supportedVideoMIMETypes is the allowlist of video MIME types we accept inline.
+var supportedVideoMIMETypes = map[string]struct{}{
+	"video/mp4":       {},
+	"video/webm":      {},
+	"video/quicktime": {},
+	"video/mpeg":      {},
+	"video/x-mpeg":    {},
+	"video/x-msvideo": {},
+	"video/x-flv":     {},
+	"video/ogg":       {},
+	"video/3gpp":      {},
+	"video/mov":       {},
+}
+
+// supportedDocumentMIMETypes is the allowlist of document MIME types we accept inline.
+var supportedDocumentMIMETypes = map[string]struct{}{
+	"application/pdf": {},
+}
+
+// isSupportedMIME reports whether the given MIME type is in our allowed sets.
+func isSupportedMIME(mime string) bool {
+	if _, ok := supportedImageMIMETypes[mime]; ok {
+		return true
+	}
+	if _, ok := supportedAudioMIMETypes[mime]; ok {
+		return true
+	}
+	if _, ok := supportedVideoMIMETypes[mime]; ok {
+		return true
+	}
+	if _, ok := supportedDocumentMIMETypes[mime]; ok {
+		return true
+	}
+	return false
+}
+
+// isImageMIME reports whether the given MIME type is an image format.
+func isImageMIME(mime string) bool {
+	return strings.HasPrefix(mime, "image/")
 }
 
 // envIntDefault returns the integer value of `name` (if set and >0) else def.
@@ -89,10 +145,16 @@ func (m mediaPart) isText() bool { return m.MIME == "" }
 
 // oaiContentPart mirrors the OpenAI content-parts wire shape for both
 // decoding and re-emission tests. Polymorphic via the Type discriminator.
+type oaiInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"` // e.g. "wav", "mp3"
+}
+
 type oaiContentPart struct {
-	Type     string       `json:"type"`
-	Text     string       `json:"text,omitempty"`
-	ImageURL *oaiImageURL `json:"image_url,omitempty"`
+	Type       string         `json:"type"`
+	Text       string         `json:"text,omitempty"`
+	ImageURL   *oaiImageURL   `json:"image_url,omitempty"`
+	InputAudio *oaiInputAudio `json:"input_audio,omitempty"`
 }
 
 // oaiImageURL is the nested object on an image_url part. We only consume
@@ -106,17 +168,17 @@ type oaiImageURL struct {
 }
 
 // ContentParts decodes the polymorphic `content` field on an OAIChatMessage
-// into an ordered slice of mediaParts (text + image). It accepts:
+// into an ordered slice of mediaParts (text + image/audio/video/document). It accepts:
 //
 //   - bare string                       → []{Text:s}
 //   - parts array with type:"text"      → text part
-//   - parts array with type:"image_url" → image part (data URL decoded)
+//   - parts array with type:"image_url" → image or media part (data URL decoded)
+//   - parts array with type:"input_audio" → audio part
 //
-// Unknown part types are skipped (forward-compat with future OAI types like
-// "input_audio"). On any parse failure for an individual part the function
+// Unknown part types are skipped. On any parse failure for an individual part the function
 // returns the parts decoded so far plus an error — handlers should treat
-// this as a 400 because silently dropping requested images would mislead
-// the caller about what the model actually saw.
+// this as a 400 because silently dropping requested media would mislead
+// the caller about what the model actually saw/heard.
 //
 // Returns (nil, nil) for a missing/empty content field — same semantics as
 // the existing ContentString.
@@ -154,10 +216,31 @@ func (m OAIChatMessage) ContentParts() ([]mediaPart, error) {
 				return out, fmt.Errorf("content part %d: %w", i, err)
 			}
 			out = append(out, mediaPart{MIME: mime, Data: data})
+		case "input_audio":
+			if p.InputAudio == nil || p.InputAudio.Data == "" || p.InputAudio.Format == "" {
+				return out, fmt.Errorf("content part %d: input_audio missing data or format", i)
+			}
+			mime := "audio/" + strings.ToLower(strings.TrimSpace(p.InputAudio.Format))
+			if mime == "audio/mp3" {
+				mime = "audio/mpeg"
+			}
+			if !isSupportedMIME(mime) {
+				return out, fmt.Errorf("content part %d: unsupported audio format %q", i, p.InputAudio.Format)
+			}
+			data, err := decodeBase64Lenient(p.InputAudio.Data)
+			if err != nil {
+				return out, fmt.Errorf("content part %d decode base64: %w", i, err)
+			}
+			if len(data) == 0 {
+				return out, fmt.Errorf("content part %d: empty audio payload", i)
+			}
+			if len(data) > maxMediaBytesPerPart {
+				return out, fmt.Errorf("content part %d: audio too large: %d bytes exceeds per-part cap of %d (GW_MAX_MEDIA_BYTES_PER_PART)",
+					i, len(data), maxMediaBytesPerPart)
+			}
+			out = append(out, mediaPart{MIME: mime, Data: data})
 		default:
-			// Unknown / future type — skip silently. Common case is OAI's
-			// upcoming "input_audio" or proprietary "file" extensions; we'd
-			// rather forward the text-only context than blow up the request.
+			// Unknown / future type — skip silently.
 			continue
 		}
 	}
@@ -173,7 +256,7 @@ func (m OAIChatMessage) ContentParts() ([]mediaPart, error) {
 func parseDataURL(s string) (string, []byte, error) {
 	const prefix = "data:"
 	if !strings.HasPrefix(s, prefix) {
-		return "", nil, errors.New("image url must be a data: URL (remote URLs not supported)")
+		return "", nil, errors.New("url must be a data: URL (remote URLs not supported)")
 	}
 	rest := s[len(prefix):]
 	commaIdx := strings.Index(rest, ",")
@@ -183,32 +266,28 @@ func parseDataURL(s string) (string, []byte, error) {
 	meta := rest[:commaIdx]
 	payload := rest[commaIdx+1:]
 
-	// meta is "<mime>;base64" or "<mime>". We require base64 encoding —
-	// urlencoded inline images would have to be ~33% larger and aren't
-	// what any real client sends.
+	// meta is "<mime>;base64" or "<mime>". We require base64 encoding.
 	if !strings.Contains(meta, ";base64") {
 		return "", nil, errors.New("malformed data url: only base64-encoded payloads supported")
 	}
 	mime := strings.TrimSuffix(meta, ";base64")
 	mime = strings.ToLower(strings.TrimSpace(mime))
 	if mime == "" {
-		// Default per RFC 2397 is text/plain — but for our purposes a
-		// missing MIME on an inline image is unambiguous user error.
 		return "", nil, errors.New("malformed data url: missing mime type")
 	}
-	if _, ok := supportedImageMIMETypes[mime]; !ok {
-		return "", nil, fmt.Errorf("unsupported image mime type %q (supported: png, jpeg, webp, gif)", mime)
+	if !isSupportedMIME(mime) {
+		return "", nil, fmt.Errorf("unsupported mime type %q", mime)
 	}
 	data, err := decodeBase64Lenient(payload)
 	if err != nil {
 		return "", nil, fmt.Errorf("decode base64: %w", err)
 	}
 	if len(data) == 0 {
-		return "", nil, errors.New("empty image payload")
+		return "", nil, errors.New("empty payload")
 	}
-	if len(data) > maxImageBytesPerPart {
-		return "", nil, fmt.Errorf("image too large: %d bytes exceeds per-part cap of %d (GW_MAX_IMAGE_BYTES_PER_PART)",
-			len(data), maxImageBytesPerPart)
+	if len(data) > maxMediaBytesPerPart {
+		return "", nil, fmt.Errorf("payload too large: %d bytes exceeds per-part cap of %d (GW_MAX_MEDIA_BYTES_PER_PART)",
+			len(data), maxMediaBytesPerPart)
 	}
 	return mime, data, nil
 }
@@ -237,38 +316,82 @@ func decodeBase64Lenient(s string) ([]byte, error) {
 }
 
 // sniffImageMIME inspects the magic bytes of an image payload and returns
-// the matching MIME type ("image/png" etc.). Used for the Ollama-native
-// `images: ["<bare-base64>"]` shape which carries no MIME. Returns the
-// empty string when nothing matches; caller should reject in that case
-// rather than guess.
+// the matching MIME type ("image/png" etc.). Kept for backward compatibility
+// and existing unit tests.
 func sniffImageMIME(data []byte) string {
+	mime := sniffMediaMIME(data)
+	if isImageMIME(mime) {
+		return mime
+	}
+	return ""
+}
+
+// sniffMediaMIME inspects the magic bytes of a media payload (image, audio, video, pdf)
+// and returns the matching MIME type. Used for the Ollama-native images/media array.
+func sniffMediaMIME(data []byte) string {
 	if len(data) < 4 {
 		return ""
 	}
-	switch {
-	case len(data) >= 8 && string(data[0:8]) == "\x89PNG\r\n\x1a\n":
+	// 1. PDF
+	if len(data) >= 5 && string(data[0:5]) == "%PDF-" {
+		return "application/pdf"
+	}
+	// 2. WAV & WebP (both use RIFF header)
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" {
+		riffType := string(data[8:12])
+		switch riffType {
+		case "WEBP":
+			return "image/webp"
+		case "WAVE":
+			return "audio/wav"
+		}
+	}
+	// 3. FLAC
+	if len(data) >= 4 && string(data[0:4]) == "fLaC" {
+		return "audio/flac"
+	}
+	// 4. Ogg
+	if len(data) >= 4 && string(data[0:4]) == "OggS" {
+		return "audio/ogg"
+	}
+	// 5. PNG, JPEG, GIF
+	if len(data) >= 8 && string(data[0:8]) == "\x89PNG\r\n\x1a\n" {
 		return "image/png"
-	case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+	}
+	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 		return "image/jpeg"
-	case len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP":
-		return "image/webp"
-	case len(data) >= 6 && (string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a"):
+	}
+	if len(data) >= 6 && (string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a") {
 		return "image/gif"
 	}
+	// 6. MP3
+	if len(data) >= 3 && string(data[0:3]) == "ID3" {
+		return "audio/mp3"
+	}
+	if len(data) >= 2 && data[0] == 0xFF && (data[1]&0xE0) == 0xE0 {
+		return "audio/mp3"
+	}
+	// 7. MP4 / MOV (contains "ftyp" at index 4)
+	if len(data) >= 8 && string(data[4:8]) == "ftyp" {
+		return "video/mp4"
+	}
+	// 8. WebM / MKV
+	if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+		return "video/webm"
+	}
+
 	return ""
 }
 
 // decodeOllamaImage decodes one entry from an Ollama-shape `images` array.
 // Ollama's wire format is bare base64 with no MIME prefix — we sniff the
 // magic bytes to pick a MIME. Returns an error if the bytes don't look
-// like a supported image format.
+// like a supported image or media format.
 func decodeOllamaImage(b64 string) (string, []byte, error) {
 	b64 = strings.TrimSpace(b64)
 	if b64 == "" {
-		return "", nil, errors.New("empty image entry")
+		return "", nil, errors.New("empty entry")
 	}
-	// Tolerate clients that accidentally send the `data:image/...;base64,`
-	// prefix in the Ollama-native slot — just defer to parseDataURL.
 	if strings.HasPrefix(b64, "data:") {
 		return parseDataURL(b64)
 	}
@@ -277,15 +400,15 @@ func decodeOllamaImage(b64 string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("decode base64: %w", err)
 	}
 	if len(data) == 0 {
-		return "", nil, errors.New("empty image payload after base64 decode")
+		return "", nil, errors.New("empty payload after base64 decode")
 	}
-	if len(data) > maxImageBytesPerPart {
-		return "", nil, fmt.Errorf("image too large: %d bytes exceeds per-part cap of %d (GW_MAX_IMAGE_BYTES_PER_PART)",
-			len(data), maxImageBytesPerPart)
-	}
-	mime := sniffImageMIME(data)
+	mime := sniffMediaMIME(data)
 	if mime == "" {
-		return "", nil, errors.New("could not identify image format (expected png/jpeg/webp/gif magic bytes)")
+		return "", nil, errors.New("could not identify media format (expected image, audio, video, or pdf magic bytes)")
+	}
+	if len(data) > maxMediaBytesPerPart {
+		return "", nil, fmt.Errorf("payload too large: %d bytes exceeds per-part cap of %d (GW_MAX_MEDIA_BYTES_PER_PART)",
+			len(data), maxMediaBytesPerPart)
 	}
 	return mime, data, nil
 }
@@ -331,8 +454,8 @@ func concatText(parts []mediaPart) string {
 	return sb.String()
 }
 
-// totalImageBytes sums the decoded byte count of every image part.
-func totalImageBytes(parts []mediaPart) int {
+// totalMediaBytes sums the decoded byte count of every media part.
+func totalMediaBytes(parts []mediaPart) int {
 	n := 0
 	for _, p := range parts {
 		if !p.isText() {
@@ -340,4 +463,9 @@ func totalImageBytes(parts []mediaPart) int {
 		}
 	}
 	return n
+}
+
+// totalImageBytes is a compatibility wrapper for totalMediaBytes.
+func totalImageBytes(parts []mediaPart) int {
+	return totalMediaBytes(parts)
 }

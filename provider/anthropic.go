@@ -321,8 +321,12 @@ func extractAnthropicBlocksFromParts(parts []*genai.Part) []anthropicBlock {
 			// Anthropic requires the bytes to be base64-encoded on the
 			// wire (not raw binary in JSON, obviously). The genai SDK
 			// stores them as []byte; we re-encode here.
+			blockType := "image"
+			if p.InlineData.MIMEType == "application/pdf" {
+				blockType = "document"
+			}
 			blocks = append(blocks, anthropicBlock{
-				Type: "image",
+				Type: blockType,
 				Source: &anthropicImageSource{
 					Type:      "base64",
 					MediaType: p.InlineData.MIMEType,
