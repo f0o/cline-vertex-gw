@@ -4,6 +4,7 @@ import (
 	"go.f0o.dev/cline-vertex-gw/logx"
 	"sort"
 	"strconv"
+	"strings"
 
 	"google.golang.org/genai"
 )
@@ -56,8 +57,19 @@ var readOnlyTools = map[string]bool{
 	"list_code_definition_names": true,
 }
 
+// toolExchange represents a single paired read-only tool call and response.
+type toolExchange struct {
+	callContentIdx int
+	callPartIdx    int
+	callName       string
+
+	respContentIdx int
+	respPartIdx    int
+}
+
 // PruneStaleTools returns a copy of contents with superseded read-only tool
-// call/response pairs removed. The original slice is never mutated.
+// call/response parts replaced with lightweight placeholders. The original
+// slice and its parts are never mutated.
 //
 // When GW_PRUNE_STALE_TOOLS is off this is a fast-path no-op.
 func PruneStaleTools(contents []*genai.Content) []*genai.Content {
@@ -65,78 +77,144 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 		return contents
 	}
 
-	// 1. Index every clean read-only call turn by (toolName + argsKey) →
-	//    sorted turn indices. A "clean" call turn has exactly one part: a
-	//    FunctionCall for a read-only tool.
-	type callRef struct {
-		idx     int // model turn index holding the FunctionCall
-		respIdx int // paired user FunctionResponse turn index, or -1
-	}
-	byKey := make(map[string][]callRef)
+	// 1. Find all paired read-only tool calls and their responses.
+	exchangesByKey := make(map[string][]toolExchange)
 	for i, c := range contents {
 		if c == nil || i == 0 {
 			continue
 		}
-		name, key, ok := cleanReadOnlyCall(c)
-		if !ok {
+		role := strings.ToLower(c.Role)
+		if role != "model" && role != "assistant" {
 			continue
 		}
-		respIdx := pairedResponseIdx(contents, i, name)
-		byKey[name+"\x00"+key] = append(byKey[name+"\x00"+key], callRef{idx: i, respIdx: respIdx})
+		// Look for read-only FunctionCalls inside this model turn.
+		for pIdx, p := range c.Parts {
+			if p == nil || p.FunctionCall == nil {
+				continue
+			}
+			fc := p.FunctionCall
+			if !readOnlyTools[fc.Name] {
+				continue
+			}
+			// Find the paired response in the next turn (i+1).
+			if i+1 >= len(contents) {
+				break
+			}
+			nextC := contents[i+1]
+			if nextC == nil {
+				continue
+			}
+			nextRole := strings.ToLower(nextC.Role)
+			if nextRole == "model" || nextRole == "assistant" {
+				continue
+			}
+			// Search for a matching FunctionResponse in the next turn's parts.
+			respPartIdx := -1
+			for rIdx, rp := range nextC.Parts {
+				if rp == nil || rp.FunctionResponse == nil {
+					continue
+				}
+				fr := rp.FunctionResponse
+				
+				// Pair by ID first if both have non-empty IDs (highly robust for OpenAI/MaaS).
+				if fc.ID != "" && fr.ID != "" {
+					if fr.ID == fc.ID {
+						respPartIdx = rIdx
+						break
+					}
+					continue
+				}
+				
+				// Fall back to name-based matching if IDs are missing (or either is empty).
+				if fr.Name == fc.Name {
+					respPartIdx = rIdx
+					break
+				}
+			}
+			if respPartIdx != -1 {
+				key := fc.Name + "\x00" + argsStableKey(fc.Args)
+				exchangesByKey[key] = append(exchangesByKey[key], toolExchange{
+					callContentIdx: i,
+					callPartIdx:    pIdx,
+					callName:       fc.Name,
+					respContentIdx: i + 1,
+					respPartIdx:    respPartIdx,
+				})
+			}
+		}
 	}
 
-	// 2. For each key with ≥2 occurrences, mark all but the LAST for removal,
-	//    along with their paired response turns.
-	remove := make(map[int]bool)
-	for _, refs := range byKey {
+	// 2. Identify which parts are superseded and mark them for replacement.
+	type replacement struct {
+		placeholder string
+	}
+	toReplace := make(map[int]map[int]replacement)
+	for _, refs := range exchangesByKey {
 		if len(refs) < 2 {
 			continue
 		}
-		// Keep the last (highest index); drop earlier ones.
-		sort.Slice(refs, func(a, b int) bool { return refs[a].idx < refs[b].idx })
-		for _, r := range refs[:len(refs)-1] {
-			if r.respIdx < 0 {
-				continue // unpaired call: leave it alone, can't drop cleanly
+		// Sort chronologically.
+		sort.Slice(refs, func(a, b int) bool {
+			return refs[a].callContentIdx < refs[b].callContentIdx
+		})
+		// Keep the last (newest); replace all earlier ones.
+		for _, x := range refs[:len(refs)-1] {
+			if toReplace[x.callContentIdx] == nil {
+				toReplace[x.callContentIdx] = make(map[int]replacement)
 			}
-			remove[r.idx] = true
-			remove[r.respIdx] = true
+			toReplace[x.callContentIdx][x.callPartIdx] = replacement{
+				placeholder: "(superseded " + x.callName + " call pruned)",
+			}
+
+			if toReplace[x.respContentIdx] == nil {
+				toReplace[x.respContentIdx] = make(map[int]replacement)
+			}
+			toReplace[x.respContentIdx][x.respPartIdx] = replacement{
+				placeholder: "(superseded " + x.callName + " output pruned)",
+			}
 		}
 	}
-	if len(remove) == 0 {
+
+	if len(toReplace) == 0 {
 		return contents
 	}
 
-	out := make([]*genai.Content, 0, len(contents))
+	// 3. Build a clean, unmutated copy of the contents with targeted placeholders.
+	out := make([]*genai.Content, len(contents))
+	replacedCount := 0
 	for i, c := range contents {
-		if remove[i] {
-			if c != nil {
-				logPruneTools.Debugf("dropped superseded read-only tool turn %d: role=%s", i, c.Role)
-			}
+		if c == nil {
+			out[i] = nil
 			continue
 		}
-		out = append(out, c)
+		partsRepls, found := toReplace[i]
+		if !found {
+			out[i] = c
+			continue
+		}
+		nc := &genai.Content{
+			Role:  c.Role,
+			Parts: make([]*genai.Part, len(c.Parts)),
+		}
+		for j, p := range c.Parts {
+			if p == nil {
+				nc.Parts[j] = nil
+				continue
+			}
+			if repl, ok := partsRepls[j]; ok {
+				nc.Parts[j] = &genai.Part{
+					Text: repl.placeholder,
+				}
+				replacedCount++
+				logPruneTools.Debugf("replaced superseded read-only tool part: turn=%d part=%d role=%s", i, j, c.Role)
+			} else {
+				nc.Parts[j] = p
+			}
+		}
+		out[i] = nc
 	}
-	logPruneTools.Debugf("removed %d superseded read-only tool turn(s)", len(remove))
+	logPruneTools.Debugf("replaced %d superseded read-only tool call/response part(s) with placeholder(s)", replacedCount)
 	return out
-}
-
-// cleanReadOnlyCall reports whether c is a single-part assistant turn holding
-// exactly one read-only FunctionCall, returning the tool name and a stable
-// key derived from its arguments. Any extra parts (text, second call) make it
-// ineligible (ok == false) so we never prune a mixed-purpose turn.
-func cleanReadOnlyCall(c *genai.Content) (name, argsKey string, ok bool) {
-	if c == nil || len(c.Parts) != 1 {
-		return "", "", false
-	}
-	p := c.Parts[0]
-	if p == nil || p.FunctionCall == nil {
-		return "", "", false
-	}
-	fc := p.FunctionCall
-	if !readOnlyTools[fc.Name] {
-		return "", "", false
-	}
-	return fc.Name, argsStableKey(fc.Args), true
 }
 
 // argsStableKey builds a deterministic key from a FunctionCall args map by
@@ -183,26 +261,4 @@ func appendValue(b []byte, v any) []byte {
 		// never equals another arg set — prevents an unsafe collapse.
 		return append(b, "\x01complex\x01"...)
 	}
-}
-
-// pairedResponseIdx returns the index of the user FunctionResponse turn that
-// immediately follows model call turn callIdx and answers the same tool, or
-// -1 if the next turn isn't a clean matching single-part response.
-func pairedResponseIdx(contents []*genai.Content, callIdx int, name string) int {
-	j := callIdx + 1
-	if j >= len(contents) {
-		return -1
-	}
-	c := contents[j]
-	if c == nil || len(c.Parts) != 1 {
-		return -1
-	}
-	p := c.Parts[0]
-	if p == nil || p.FunctionResponse == nil {
-		return -1
-	}
-	if p.FunctionResponse.Name != name {
-		return -1
-	}
-	return j
 }

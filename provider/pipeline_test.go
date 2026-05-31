@@ -272,3 +272,53 @@ func TestPipeline_GeminiXMLHint(t *testing.T) {
 		t.Errorf("expected XML hint NOT to be injected when disabled, but got: %q", sysDisabled)
 	}
 }
+
+// TestPipeline_CompressionMetrics verifies that our registered callback
+// gets invoked with correct stage names and positive bytes-saved values.
+func TestPipeline_CompressionMetrics(t *testing.T) {
+	defer withNormalize(t, false)()
+	defer withCollapseEnv(t, true, 100)()
+	defer withMaxInputChars(t, 0)()
+	defer withDedup(t, true, 100)()
+
+	// Track callback invocations.
+	called := make(map[string]int)
+	SetCompressionMetrics(func(stage string, bytes int) {
+		called[stage] = bytes
+	})
+	defer func() {
+		onCompressionSaved = func(stage string, bytes int) {}
+	}()
+
+	envBlock := makeEnvBlock(3000)
+	big := strings.Repeat("E", 2000)
+	in := []*genai.Content{
+		{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{
+				{Text: "first user turn " + envBlock},
+				{Text: big},
+			},
+		},
+		{
+			Role:  genai.RoleModel,
+			Parts: []*genai.Part{{Text: "ack"}},
+		},
+		{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{
+				{Text: "second user turn " + envBlock}, // envBlock here will be collapsed
+				{Text: big},                          // big here will be exact-deduplicated
+			},
+		},
+	}
+
+	_, _ = applyCompressionPipeline(in, "", "claude-3-5-sonnet")
+
+	if called["envblocks"] <= 0 {
+		t.Errorf("expected envblocks callback to receive positive saved bytes, got: %d", called["envblocks"])
+	}
+	if called["dedup"] <= 0 {
+		t.Errorf("expected dedup callback to receive positive saved bytes, got: %d", called["dedup"])
+	}
+}

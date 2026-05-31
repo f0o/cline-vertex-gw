@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -98,8 +99,11 @@ func CollapseEnvBlocks(contents []*genai.Content) []*genai.Content {
 		collapsedCount += n
 	}
 	if collapsedCount > 0 {
-		logEnvblocks.Debugf("collapsed %d stale env block(s), saved ~%dB",
-			collapsedCount, totalSaved)
+		logEnvblocks.L().Debug("collapsed stale env block(s)",
+			slog.Int("collapsed_count", collapsedCount),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("envblocks", totalSaved)
 	}
 	return out
 }

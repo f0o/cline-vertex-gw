@@ -143,4 +143,5 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // api depends on provider, provider does not depend on api.
 func init() {
 	provider.SetTagsCacheMetrics(MetricsTagsCacheHit, MetricsTagsCacheMiss)
+	provider.SetCompressionMetrics(MetricsCompressionBytesSaved)
 }

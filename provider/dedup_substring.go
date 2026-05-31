@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -145,8 +146,11 @@ func DedupSubstringBlocks(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if replacedCount > 0 {
-		logDedupSub.Debugf("collapsed %d embedded block(s), saved ~%dB",
-			replacedCount, totalSaved)
+		logDedupSub.L().Debug("collapsed embedded block(s)",
+			slog.Int("replaced_count", replacedCount),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("dedup_substring", totalSaved)
 	}
 	return out
 }

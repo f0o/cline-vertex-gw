@@ -258,6 +258,8 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
+		provider.LogOptimizerPipelineConfiguration()
+
 		logx.Info("starting Cline Vertex Gateway",
 			"version", version, "addr", addr, "auth", authToken != "",
 			"max_body_mb", maxBodyMB, "write_timeout", writeTimeout.String(),

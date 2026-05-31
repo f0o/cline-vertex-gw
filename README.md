@@ -433,7 +433,7 @@ operator-actionable metrics:
 | `cline_vertex_gw_upstream_loop_detector_fired_total` | counter | — | How often the runaway detector saved you money. |
 | `cline_vertex_gw_tags_cache_hits_total` / `_misses_total` | counters | — | Hit ratio for the `/api/tags` cache. Should approach 1.0 in steady state. |
 | `cline_vertex_gw_panics_recovered_total` | counter | — | Any non-zero value indicates a bug — file an issue. |
-| `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage. |
+| `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage (`envblocks`, `toolresult`, `dedup`, `dedup_substring`). |
 | `cline_vertex_gw_estimated_cost_usd_total` | counter | `kind`, `model`, `tier` | Cumulative **estimated** USD spend by `kind={input,cached,output}`, `model` ID, and API routing `tier={standard,priority,flex}`. Prices are scraped live from the GCP Cloud Billing Catalog API. `sum(rate(cline_vertex_gw_estimated_cost_usd_total[1h]))` gives your hourly burn; `by (model, tier)` shows which model/tier dominates spend. Disabled when `GW_PRICING=off`. |
 
 ### Cost estimation

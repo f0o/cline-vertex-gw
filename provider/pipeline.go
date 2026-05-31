@@ -1,6 +1,58 @@
 package provider
 
-import "google.golang.org/genai"
+import (
+	"fmt"
+	"go.f0o.dev/cline-vertex-gw/logx"
+	"strings"
+
+	"google.golang.org/genai"
+)
+
+// onCompressionSaved is wired by the api package via the SetCompressionMetrics
+// hook so this package stays metrics-agnostic (avoids an import cycle back
+// into the api package).
+var onCompressionSaved = func(stage string, bytes int) {}
+
+// SetCompressionMetrics installs the callback for recording bytes saved.
+func SetCompressionMetrics(cb func(stage string, bytes int)) {
+	if cb != nil {
+		onCompressionSaved = cb
+	}
+}
+
+// LogOptimizerPipelineConfiguration prints a single INFO-level log showing all prompt optimization
+// knobs and parameters that are currently active or loaded.
+func LogOptimizerPipelineConfiguration() {
+	var active []string
+	if breakLoopTrapEnabled {
+		active = append(active, fmt.Sprintf("loopbreak(nudge=%t)", loopTrapNudgeEnabled))
+	}
+	if pruneStaleTools {
+		active = append(active, "prune_tools")
+	}
+	if collapseEnvBlocks {
+		active = append(active, fmt.Sprintf("envblocks(min_bytes=%d)", collapseEnvMinBytes))
+	}
+	if toolResultTruncate {
+		active = append(active, fmt.Sprintf("toolresult(max_bytes=%d,head=%d,tail=%d)", toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes))
+	}
+	if maxInputChars > 0 {
+		active = append(active, fmt.Sprintf("trim(max_chars=%d)", maxInputChars))
+	}
+	if dedupReplay {
+		active = append(active, fmt.Sprintf("dedup(min_bytes=%d)", dedupMinBytes))
+	}
+	if dedupSubstring {
+		active = append(active, fmt.Sprintf("dedup_substring(min_bytes=%d)", dedupSubstringMinBytes))
+	}
+	if geminiXmlHint {
+		active = append(active, "gemini_xml_hint")
+	}
+
+	logx.For("optimizer").Info("prompt optimizer pipeline loaded",
+		"active_optimizers", strings.Join(active, ", "),
+	)
+}
 
 // Configuration to automatically inject an XML compliance reminder/hint
 // for Google/Gemini models to help them format tool tags correctly.

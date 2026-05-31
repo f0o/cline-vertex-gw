@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -161,8 +162,12 @@ func DedupReplayedBlocks(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if replacedCount > 0 {
-		logDedup.Debugf("replaced %d duplicate block(s) (%d image), saved ~%dB",
-			replacedCount, replacedImages, totalSaved)
+		logDedup.L().Debug("replaced duplicate block(s)",
+			slog.Int("replaced_count", replacedCount),
+			slog.Int("replaced_images", replacedImages),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("dedup", totalSaved)
 	}
 	return out
 }

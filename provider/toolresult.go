@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -118,8 +119,11 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if truncatedCount > 0 {
-		logToolresult.Debugf("truncated %d oversized tool result(s), saved ~%dB",
-			truncatedCount, totalSaved)
+		logToolresult.L().Debug("truncated oversized tool result(s)",
+			slog.Int("truncated_count", truncatedCount),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("toolresult", totalSaved)
 	}
 	return out
 }
