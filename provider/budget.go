@@ -2,6 +2,7 @@ package provider
 
 import (
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -94,8 +95,19 @@ func TrimContents(contents []*genai.Content, systemPrompt string) []*genai.Conte
 
 	dropped := keepFromIdx
 	kept := contents[keepFromIdx:]
-	logTrim.Debugf("GW_MAX_INPUT_CHARS=%d sys=%dB total=%dB → dropped %d oldest turn(s), kept %d (%dB)",
-		budget, sysBytes, total, dropped, len(kept), used)
+	totalSaved := total - used
+	logTrim.L().Debug("trimmed oldest turns to fit budget",
+		slog.Int("budget", budget),
+		slog.Int("sys_bytes", sysBytes),
+		slog.Int("total_bytes", total),
+		slog.Int("dropped_turns", dropped),
+		slog.Int("kept_turns", len(kept)),
+		slog.Int("used_bytes", used),
+		slog.Int("bytes_saved", totalSaved),
+	)
+	if totalSaved > 0 {
+		onCompressionSaved("trim", totalSaved)
+	}
 	return kept
 }
 

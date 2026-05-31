@@ -322,3 +322,173 @@ func TestPipeline_CompressionMetrics(t *testing.T) {
 		t.Errorf("expected dedup callback to receive positive saved bytes, got: %d", called["dedup"])
 	}
 }
+
+// TestPipeline_CompressionMetricsExtended verifies that ALL 8 optimization and compression
+// stages correctly invoke the metrics callback and log structured bytes saved.
+func TestPipeline_CompressionMetricsExtended(t *testing.T) {
+	defer withNormalize(t, true)()
+	defer withCollapseEnv(t, true, 100)()
+	defer withDedup(t, true, 150)()
+	defer withSubstringDedup(t, true, 300)()
+	defer withPruneTools(t, true)()
+	defer withToolResult(t, true, 500, 50, 50)()
+	defer withLoopBreak(t, true, false)()
+
+	called := make(map[string]int)
+	SetCompressionMetrics(func(stage string, bytes int) {
+		called[stage] += bytes
+	})
+	defer func() {
+		onCompressionSaved = func(stage string, bytes int) {}
+	}()
+
+	envBlock := makeEnvBlock(3000)
+	big := strings.Repeat("E", 200)
+	substringNeedle := "THIS IS A REALLY BIG NEEDLE EMBEDDED IN USER TURNS " + strings.Repeat("N", 300)
+
+	// Run 1: High/No budget to test 7 of the stages (keeping first turn intact for dedup needle)
+	t.Run("Stage 1-7 (no trim)", func(t *testing.T) {
+		defer withMaxInputChars(t, 0)()
+
+		in := []*genai.Content{
+			// 1. Initial user turn containing some bloated whitespace, big text, and envBlock
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{Text: "first user turn " + envBlock + "   \r\n\r\n\r\n"},
+					{Text: big},
+					{Text: substringNeedle},
+				},
+			},
+			// 2. Initial model turn that makes a read_file call
+			{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						FunctionCall: &genai.FunctionCall{
+							Name: "read_file",
+							Args: map[string]any{"path": "foo.txt"},
+							ID:   "call_001",
+						},
+					},
+				},
+			},
+			// 3. User response to tool call (will be pruned later by a subsequent identical call)
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{
+						FunctionResponse: &genai.FunctionResponse{
+							Name: "read_file",
+							Response: map[string]any{"output": "huge file content " + strings.Repeat("F", 1000)},
+							ID:   "call_001",
+						},
+					},
+				},
+			},
+			// 4. Model repeats the exact same read_file call (superseding turn 2)
+			{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						FunctionCall: &genai.FunctionCall{
+							Name: "read_file",
+							Args: map[string]any{"path": "foo.txt"},
+							ID:   "call_002",
+						},
+					},
+				},
+			},
+			// 5. User response to second tool call
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{
+						FunctionResponse: &genai.FunctionResponse{
+							Name: "read_file",
+							Response: map[string]any{"output": "huge file content " + strings.Repeat("F", 1000)},
+							ID:   "call_002",
+						},
+					},
+				},
+			},
+			// 6. User turn that scolded model (will be trapped/collapsed by BreakLoopTrap if duplicated)
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: "You did not use a tool in your previous response!"},
+				},
+			},
+			// 7. Duplicate scolding turn (duplicate loop trap)
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: "You did not use a tool in your previous response!"},
+				},
+			},
+			// 8. Model turn with some tool result that is oversized (for tool result truncation)
+			{
+				Role: "model",
+				Parts: []*genai.Part{
+					{Text: "I will read the file."},
+				},
+			},
+			// 9. Tool response to read_file that is oversized (will be middle-elided)
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{
+						FunctionResponse: &genai.FunctionResponse{
+							Name: "read_file",
+							Response: map[string]any{"output": "head line\n" + strings.Repeat("A\n", 500) + "tail line"},
+							ID:   "call_003",
+						},
+					},
+				},
+			},
+			// 10. Final user turn containing duplicate envBlock, duplicate big block, and substring needle
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{Text: "second user turn " + envBlock}, // envBlock here will be collapsed
+					{Text: big},                          // big here will be exact-deduplicated
+					{Text: "Some extra text " + substringNeedle}, // substring deduplication
+				},
+			},
+		}
+
+		_, _ = applyCompressionPipeline(in, "   system prompt text   \r\n\r\n\r\n", "claude-3-5-sonnet")
+	})
+
+	// Run 2: Low budget to test "trim" stage specifically
+	t.Run("Stage 8 (with trim)", func(t *testing.T) {
+		defer withMaxInputChars(t, 150)()
+
+		in := []*genai.Content{
+			{
+				Role:  genai.RoleUser,
+				Parts: []*genai.Part{{Text: "massive history turn that will get trimmed" + strings.Repeat("X", 3000)}},
+			},
+			{
+				Role:  genai.RoleModel,
+				Parts: []*genai.Part{{Text: "ack"}},
+			},
+			{
+				Role:  genai.RoleUser,
+				Parts: []*genai.Part{{Text: "short user turn that survives"}},
+			},
+		}
+
+		_, _ = applyCompressionPipeline(in, "system prompt", "claude-3-5-sonnet")
+	})
+
+	// Verify that ALL metrics were called with positive numbers
+	stages := []string{"normalize", "envblocks", "toolresult", "dedup", "dedup_substring", "prune_tools", "trim", "loopbreak"}
+	for _, stage := range stages {
+		if called[stage] <= 0 {
+			t.Errorf("expected stage %q callback to receive positive saved bytes, got: %d", stage, called[stage])
+		} else {
+			t.Logf("stage %q successfully reported %d saved bytes", stage, called[stage])
+		}
+	}
+}

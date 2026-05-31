@@ -2,6 +2,7 @@ package provider
 
 import (
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,6 +183,7 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 	// 3. Build a clean, unmutated copy of the contents with targeted placeholders.
 	out := make([]*genai.Content, len(contents))
 	replacedCount := 0
+	totalSaved := 0
 	for i, c := range contents {
 		if c == nil {
 			out[i] = nil
@@ -206,6 +208,10 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 					Text: repl.placeholder,
 				}
 				replacedCount++
+				saved := partBytes(p) - len(repl.placeholder)
+				if saved > 0 {
+					totalSaved += saved
+				}
 				logPruneTools.Debugf("replaced superseded read-only tool part: turn=%d part=%d role=%s", i, j, c.Role)
 			} else {
 				nc.Parts[j] = p
@@ -213,8 +219,43 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 		}
 		out[i] = nc
 	}
-	logPruneTools.Debugf("replaced %d superseded read-only tool call/response part(s) with placeholder(s)", replacedCount)
+	if replacedCount > 0 {
+		logPruneTools.L().Debug("replaced superseded read-only tool call/response parts",
+			slog.Int("replaced_count", replacedCount),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("prune_tools", totalSaved)
+	}
 	return out
+}
+
+func partBytes(p *genai.Part) int {
+	if p == nil {
+		return 0
+	}
+	switch {
+	case p.Text != "":
+		return len(p.Text)
+	case p.InlineData != nil:
+		return len(p.InlineData.Data)
+	case p.FunctionCall != nil:
+		return 64
+	case p.FunctionResponse != nil:
+		sum := 0
+		for _, v := range p.FunctionResponse.Response {
+			if s, ok := v.(string); ok {
+				sum += len(s)
+			} else {
+				sum += 16
+			}
+		}
+		if sum == 0 {
+			sum = 64
+		}
+		return sum
+	default:
+		return 0
+	}
 }
 
 // argsStableKey builds a deterministic key from a FunctionCall args map by

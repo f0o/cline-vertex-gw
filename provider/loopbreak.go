@@ -2,6 +2,7 @@ package provider
 
 import (
 	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -106,17 +107,25 @@ func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
 		}
 	}
 
+	totalSaved := 0
 	var out []*genai.Content
 	for i, k := range keep {
 		if k {
 			out = append(out, contents[i])
 		} else if contents[i] != nil {
+			totalSaved += contentBytes(contents[i])
 			logLoopbreak.Debugf("dropped stale loop-trap turn %d: role=%s", i, contents[i].Role)
 		}
 	}
 
 	if droppedCount > 0 {
-		logLoopbreak.Debugf("removed %d duplicate/empty loop-trap turns from history", droppedCount)
+		logLoopbreak.L().Debug("removed duplicate/empty loop-trap turns from history",
+			slog.Int("dropped_count", droppedCount),
+			slog.Int("bytes_saved", totalSaved),
+		)
+		if totalSaved > 0 {
+			onCompressionSaved("loopbreak", totalSaved)
+		}
 	}
 
 	// 3. Nudge the model on the last turn if it's a scolding turn

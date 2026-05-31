@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---- build stage ----------------------------------------------------------
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -15,11 +15,13 @@ COPY . .
 # ends up baked into the binary via `-X main.version=...` so /healthz, the
 # /version endpoint, and the startup log line all report something useful.
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 
 # CGO disabled => fully static binary, suitable for distroless/scratch.
 # -trimpath strips local paths from the binary for reproducibility.
 # -ldflags strips DWARF/symtab AND injects the version.
-ENV CGO_ENABLED=0 GOOS=linux
+ENV CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}
 RUN go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /out/cline-vertex-gw .

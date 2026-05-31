@@ -433,7 +433,7 @@ operator-actionable metrics:
 | `cline_vertex_gw_upstream_loop_detector_fired_total` | counter | — | How often the runaway detector saved you money. |
 | `cline_vertex_gw_tags_cache_hits_total` / `_misses_total` | counters | — | Hit ratio for the `/api/tags` cache. Should approach 1.0 in steady state. |
 | `cline_vertex_gw_panics_recovered_total` | counter | — | Any non-zero value indicates a bug — file an issue. |
-| `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage (`envblocks`, `toolresult`, `dedup`, `dedup_substring`). |
+| `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage (`envblocks`, `toolresult`, `dedup`, `dedup_substring`, `normalize`, `prune_tools`, `trim`, `loopbreak`). |
 | `cline_vertex_gw_estimated_cost_usd_total` | counter | `kind`, `model`, `tier` | Cumulative **estimated** USD spend by `kind={input,cached,output}`, `model` ID, and API routing `tier={standard,priority,flex}`. Prices are scraped live from the GCP Cloud Billing Catalog API. `sum(rate(cline_vertex_gw_estimated_cost_usd_total[1h]))` gives your hourly burn; `by (model, tier)` shows which model/tier dominates spend. Disabled when `GW_PRICING=off`. |
 
 ### Cost estimation
@@ -890,6 +890,37 @@ Currently implemented publishers: `google`, `anthropic`, `cohere`, `meta`,
 `mistralai`, `ai21`, `deepseek-ai`, `qwen`, `nvidia`. Unsupported publishers
 fail fast with a clear error rather than the SDK's misleading
 `"is not servable in region ..."`.
+
+---
+
+## Installation & Deployment
+
+### Prebuilt Binary Packages
+Precompiled executable packages for multiple operating systems and architectures (Linux, macOS, and Windows for both `amd64` and `arm64`) are automatically built and published with every release.
+
+You can download them directly from the **[GitHub Releases](https://github.com/f0o/cline-vertex-gw/releases)** page.
+
+To run:
+```bash
+./cline-vertex-gw
+```
+
+### Docker Containers
+Multi-architecture Docker images are automatically built and pushed to the **GitHub Container Registry (GHCR)**.
+
+- **Stable Releases**: `ghcr.io/f0o/cline-vertex-gw:latest` (or pinned to a specific version like `ghcr.io/f0o/cline-vertex-gw:0.17.0`)
+- **Development Builds**: `ghcr.io/f0o/cline-vertex-gw:edge` (built directly from the latest commit on the `main` branch)
+
+To run the container:
+```bash
+docker run -d \
+  -p 11434:11434 \
+  -e GOOGLE_CLOUD_PROJECT="your-gcp-project" \
+  -e GOOGLE_CLOUD_LOCATION="us-central1" \
+  ghcr.io/f0o/cline-vertex-gw:latest
+```
+
+Ensure your host environment has Google Application Default Credentials configured, or mount your GCP service account key into the container.
 
 ---
 

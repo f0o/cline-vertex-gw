@@ -1,10 +1,15 @@
 package provider
 
 import (
+	"go.f0o.dev/cline-vertex-gw/logx"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logNormalize scopes pipeline-compression logs to component=normalize (DEBUG: per-request diagnostics).
+var logNormalize = logx.Scoped("normalize")
 
 // Whitespace normalization is the cheapest, safest token-compression layer
 // in the gateway. It targets bloat introduced by tool outputs and editor
@@ -41,6 +46,7 @@ func NormalizeWhitespace(contents []*genai.Content) []*genai.Content {
 		return contents
 	}
 	out := make([]*genai.Content, len(contents))
+	totalSaved := 0
 	for i, c := range contents {
 		if c == nil {
 			out[i] = nil
@@ -63,10 +69,17 @@ func NormalizeWhitespace(contents []*genai.Content) []*genai.Content {
 				}
 				np := *p
 				np.Text = normalizeText(p.Text)
+				totalSaved += len(p.Text) - len(np.Text)
 				nc.Parts[j] = &np
 			}
 		}
 		out[i] = nc
+	}
+	if totalSaved > 0 {
+		logNormalize.L().Debug("normalized contents whitespace",
+			slog.Int("bytes_saved", totalSaved),
+		)
+		onCompressionSaved("normalize", totalSaved)
 	}
 	return out
 }
@@ -77,7 +90,15 @@ func NormalizeSystemPrompt(s string) string {
 	if !normalizeWhitespace || s == "" {
 		return s
 	}
-	return normalizeText(s)
+	ns := normalizeText(s)
+	saved := len(s) - len(ns)
+	if saved > 0 {
+		logNormalize.L().Debug("normalized system prompt whitespace",
+			slog.Int("bytes_saved", saved),
+		)
+		onCompressionSaved("normalize", saved)
+	}
+	return ns
 }
 
 // normalizeText performs the actual byte-level rewrite. It's structured to
