@@ -28,17 +28,17 @@ func resetMetricsForTest(t *testing.T) {
 func TestMetricsEstimatedCost(t *testing.T) {
 	resetMetricsForTest(t)
 
-	MetricsEstimatedCost("input", "gemini-2.5-pro", 1.0)
-	MetricsEstimatedCost("input", "gemini-2.5-pro", 0.5) // accumulates → 1.5
-	MetricsEstimatedCost("cached", "gemini-2.5-pro", 0.062)
-	MetricsEstimatedCost("output", "gemini-2.5-pro", 5.0)
-	MetricsEstimatedCost("output", "gemini-2.5-pro", 0) // ignored (non-positive)
+	MetricsEstimatedCost("input", "gemini-2.5-pro", "standard", 1.0)
+	MetricsEstimatedCost("input", "gemini-2.5-pro", "standard", 0.5) // accumulates → 1.5
+	MetricsEstimatedCost("cached", "gemini-2.5-pro", "priority", 0.062)
+	MetricsEstimatedCost("output", "gemini-2.5-pro", "flex", 5.0)
+	MetricsEstimatedCost("output", "gemini-2.5-pro", "standard", 0) // ignored (non-positive)
 
 	body := exposition()
 	mustContain(t, body, `# TYPE cline_vertex_gw_estimated_cost_usd_total counter`)
-	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="input",model="gemini-2.5-pro"} 1.5`)
-	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="cached",model="gemini-2.5-pro"} 0.062`)
-	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="output",model="gemini-2.5-pro"} 5`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="input",model="gemini-2.5-pro",tier="standard"} 1.5`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="cached",model="gemini-2.5-pro",tier="priority"} 0.062`)
+	mustContain(t, body, `cline_vertex_gw_estimated_cost_usd_total{kind="output",model="gemini-2.5-pro",tier="flex"} 5`)
 }
 
 func TestMetricsHandlerEmpty(t *testing.T) {

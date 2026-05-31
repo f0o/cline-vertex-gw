@@ -2,11 +2,14 @@ package provider
 
 import (
 	"fmt"
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logEnvblocks scopes pipeline-compression logs to component=envblocks (DEBUG: per-request diagnostics).
+var logEnvblocks = logx.Scoped("envblocks")
 
 // Cline injects an <environment_details>...</environment_details> block at
 // the END of every user turn. The block carries the IDE's current state:
@@ -95,7 +98,7 @@ func CollapseEnvBlocks(contents []*genai.Content) []*genai.Content {
 		collapsedCount += n
 	}
 	if collapsedCount > 0 {
-		log.Printf("[envblocks] collapsed %d stale env block(s), saved ~%dB",
+		logEnvblocks.Debugf("collapsed %d stale env block(s), saved ~%dB",
 			collapsedCount, totalSaved)
 	}
 	return out

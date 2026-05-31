@@ -2,11 +2,14 @@ package provider
 
 import (
 	"fmt"
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logToolresult scopes pipeline-compression logs to component=toolresult (DEBUG: per-request diagnostics).
+var logToolresult = logx.Scoped("toolresult")
 
 // Tool results (read_file dumps, terminal output, search results) dominate
 // token volume in agentic Cline sessions. The same enormous blob is often
@@ -115,7 +118,7 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if truncatedCount > 0 {
-		log.Printf("[toolresult] truncated %d oversized tool result(s), saved ~%dB",
+		logToolresult.Debugf("truncated %d oversized tool result(s), saved ~%dB",
 			truncatedCount, totalSaved)
 	}
 	return out

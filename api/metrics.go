@@ -168,8 +168,8 @@ func MetricsCompressionBytesSaved(stage string, bytes int) {
 // model and kind (input|cached|output). Prices are scraped live from the
 // Cloud Billing Catalog API; see provider/pricing.go. Non-positive amounts are
 // ignored (the floatCounterVec drops them).
-func MetricsEstimatedCost(kind, model string, usd float64) {
-	metrics.estimatedCost.Add(fmt.Sprintf(`kind=%q,model=%q`, kind, model), usd)
+func MetricsEstimatedCost(kind, model, tier string, usd float64) {
+	metrics.estimatedCost.Add(fmt.Sprintf(`kind=%q,model=%q,tier=%q`, kind, model, tier), usd)
 }
 
 // --- exposition -----------------------------------------------------------

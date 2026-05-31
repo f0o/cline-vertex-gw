@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
-	"log"
 	"net/http"
 	"runtime/debug"
 	"strings"
+
+	"go.f0o.dev/cline-vertex-gw/logx"
+	"go.f0o.dev/cline-vertex-gw/provider"
 )
 
 // RecoverMiddleware catches any panic in downstream handlers, logs the stack,
@@ -17,8 +20,10 @@ func RecoverMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				MetricsPanicRecovered()
-				log.Printf("PANIC handling %s %s: %v\n%s",
-					r.Method, r.URL.Path, rec, debug.Stack())
+				logx.For("http").Error("panic recovered while handling request",
+					"method", r.Method, "path", r.URL.Path,
+					"panic", rec, "stack", string(debug.Stack()))
+
 				// If headers haven't been flushed yet we can still write a
 				// proper 500 — if they have (streaming), the connection is
 				// effectively dead; just abort.
@@ -104,4 +109,28 @@ func extractBearer(h string) (string, error) {
 		return "", errors.New("empty bearer token")
 	}
 	return token, nil
+}
+
+// RoutingTierMiddleware extracts the routing tier from the incoming request headers,
+// normalizes it, and injects it into the request context.
+func RoutingTierMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tier := r.Header.Get("X-Routing-Tier")
+		if tier == "" {
+			tier = r.Header.Get("X-Vertex-AI-Routing-Tier")
+		}
+
+		normalized := "standard"
+		switch strings.ToLower(strings.TrimSpace(tier)) {
+		case "priority":
+			normalized = "priority"
+		case "flex", "batch", "flex/batch":
+			normalized = "flex"
+		default:
+			normalized = "standard"
+		}
+
+		ctx := context.WithValue(r.Context(), provider.ContextKeyRoutingTier, normalized)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

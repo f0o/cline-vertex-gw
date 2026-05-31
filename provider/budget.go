@@ -1,11 +1,14 @@
 package provider
 
 import (
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logTrim scopes pipeline-compression logs to component=trim (DEBUG: per-request diagnostics).
+var logTrim = logx.Scoped("trim")
 
 // Conversation-history trimming knobs. Cline sessions accumulate large
 // tool-result blobs in older turns; on long-running tasks the request body
@@ -55,7 +58,7 @@ func TrimContents(contents []*genai.Content, systemPrompt string) []*genai.Conte
 	if sysBytes >= budget {
 		// System prompt alone exceeds budget. Nothing the trimmer can do
 		// without breaking the system instruction; just return last turn.
-		log.Printf("[trim] system prompt (%dB) >= GW_MAX_INPUT_CHARS (%d); keeping only last turn",
+		logTrim.Debugf("system prompt (%dB) >= GW_MAX_INPUT_CHARS (%d); keeping only last turn",
 			sysBytes, budget)
 		return contents[len(contents)-minRetainedTurns:]
 	}
@@ -91,7 +94,7 @@ func TrimContents(contents []*genai.Content, systemPrompt string) []*genai.Conte
 
 	dropped := keepFromIdx
 	kept := contents[keepFromIdx:]
-	log.Printf("[trim] GW_MAX_INPUT_CHARS=%d sys=%dB total=%dB → dropped %d oldest turn(s), kept %d (%dB)",
+	logTrim.Debugf("GW_MAX_INPUT_CHARS=%d sys=%dB total=%dB → dropped %d oldest turn(s), kept %d (%dB)",
 		budget, sysBytes, total, dropped, len(kept), used)
 	return kept
 }

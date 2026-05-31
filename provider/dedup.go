@@ -4,11 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logDedup scopes pipeline-compression logs to component=dedup (DEBUG: per-request diagnostics).
+var logDedup = logx.Scoped("dedup")
 
 // Cline replays identical content across turns constantly: the same
 // `read_file` result, the same tool output, the same code paste from an
@@ -158,7 +161,7 @@ func DedupReplayedBlocks(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if replacedCount > 0 {
-		log.Printf("[dedup] replaced %d duplicate block(s) (%d image), saved ~%dB",
+		logDedup.Debugf("replaced %d duplicate block(s) (%d image), saved ~%dB",
 			replacedCount, replacedImages, totalSaved)
 	}
 	return out

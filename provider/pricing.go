@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 )
+
+// logPricingScrape scopes billing-catalog scrape logs to component=pricing.
+var logPricingScrape = logx.Scoped("pricing")
 
 // Live model-pricing discovery via the Cloud Billing Catalog API.
 //
@@ -121,6 +124,22 @@ func (s *pricingState) setTable(t map[string]ModelPrice) {
 	s.mu.Unlock()
 }
 
+// snapshot returns a shallow copy of the current pricing table for
+// serialization to the on-disk cache. Returns nil when the table is empty so
+// callers can skip persisting a useless empty file.
+func (s *pricingState) snapshot() map[string]ModelPrice {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.table) == 0 {
+		return nil
+	}
+	out := make(map[string]ModelPrice, len(s.table))
+	for k, v := range s.table {
+		out[k] = v
+	}
+	return out
+}
+
 // versionAgnosticKey strips all numeric digit characters from a normalized key.
 // This allows matching across version numbers, e.g. "claudeopus48" and "claude3opus"
 // both map to "claudeopus", and "gemini35flash" and "gemini25flash" map to "geminiflash".
@@ -196,11 +215,30 @@ func LookupPrice(model string) (ModelPrice, bool) { return pricing.lookup(model)
 //
 // ok is false when pricing for the model is unknown — callers should then
 // print "cost unavailable" and skip cost metrics rather than report $0.
-func EstimateCost(model string, promptTokens, cachedTokens, completionTokens int32) (CostBreakdown, bool) {
+func EstimateCost(ctx context.Context, model string, promptTokens, cachedTokens, completionTokens int32) (CostBreakdown, bool) {
 	if !PricingEnabled() {
 		return CostBreakdown{}, false
 	}
-	mp, found := pricing.lookup(model)
+
+	tier := "standard"
+	if ctx != nil {
+		if t, ok := ctx.Value(ContextKeyRoutingTier).(string); ok && t != "" {
+			tier = t
+		}
+	}
+
+	// Try the tier-specific entry first; fall back to the standard rate when a
+	// model doesn't offer that tier (not every model has Priority/Flex). The
+	// suffix matches the keys produced by the HTML scraper and resolveSKU.
+	var mp ModelPrice
+	var found bool
+	if sfx := tierSuffix(tier); sfx != "" {
+		mp, found = pricing.lookup(model + sfx)
+	}
+	if !found {
+		mp, found = pricing.lookup(model)
+	}
+
 	if !found || !mp.Known() {
 		return CostBreakdown{}, false
 	}
@@ -257,9 +295,9 @@ func (vc *VertexClient) RefreshPricing(ctx context.Context) error {
 
 	// 1. Scrape the HTML pricing page (ModelCard/Docs ground truth)
 	if err := vc.scrapeHTMLPricing(ctx, table); err != nil {
-		log.Printf("[pricing] HTML docs scraping failed: %v", err)
+		logPricingScrape.Warnf("HTML docs scraping failed: %v", err)
 	} else {
-		log.Printf("[pricing] HTML docs scraping completed, resolved %d model rates", len(table))
+		logPricingScrape.Infof("HTML docs scraping completed, resolved %d model rates", len(table))
 	}
 
 	// 2. Scrape the Cloud Billing API (merged on top of HTML rates)
@@ -284,7 +322,7 @@ func (vc *VertexClient) RefreshPricing(ctx context.Context) error {
 			// Most services 403/404 for a given project; that's expected when
 			// scanning the whole catalog. Only log at debug to avoid noise.
 			if dbg {
-				log.Printf("[pricing][debug] service=%q skus failed: %v", svc.DisplayName, serr)
+				logPricingScrape.Debugf("service=%q skus failed: %v", svc.DisplayName, serr)
 			}
 			continue
 		}
@@ -294,7 +332,7 @@ func (vc *VertexClient) RefreshPricing(ctx context.Context) error {
 		if len(table) > before {
 			servicesWithPrices++
 			if dbg {
-				log.Printf("[pricing][debug] service display=%q id=%q skus=%d contributed=%d",
+				logPricingScrape.Debugf("service display=%q id=%q skus=%d contributed=%d",
 					svc.DisplayName, svc.Name, len(skus), len(table)-before)
 			}
 		}
@@ -309,7 +347,7 @@ func (vc *VertexClient) RefreshPricing(ctx context.Context) error {
 	}
 
 	pricing.setTable(table)
-	log.Printf("[pricing] services_scanned=%d services_with_prices=%d skus_seen=%d models_priced=%d elapsed=%v",
+	logPricingScrape.Infof("services_scanned=%d services_with_prices=%d skus_seen=%d models_priced=%d elapsed=%v",
 		len(services), servicesWithPrices, skuCount, len(table), time.Since(start))
 	return nil
 }
@@ -325,7 +363,7 @@ func dumpPricingTable(table map[string]ModelPrice) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		mp := table[k]
-		log.Printf("[pricing][debug] model=%q in=$%.4f cached=$%.4f out=$%.4f approx=%v src=%q",
+		logPricingScrape.Debugf("model=%q in=$%.4f cached=$%.4f out=$%.4f approx=%v src=%q",
 			k, mp.InputPerM, mp.CachedPerM, mp.OutputPerM, mp.Approx, mp.Source)
 	}
 }
@@ -473,7 +511,7 @@ func mergeSKUsIntoTable(table map[string]ModelPrice, skus []rawSKU, source strin
 					nanos = pe.TieredRates[0].UnitPrice.Nanos
 				}
 			}
-			log.Printf("[pricing][debug] sku desc=%q unit=%q tiers=%d tier0(units=%q nanos=%d) -> model=%q kind=%s ratePerM=$%.4f ok=%v",
+			logPricingScrape.Debugf("sku desc=%q unit=%q tiers=%d tier0(units=%q nanos=%d) -> model=%q kind=%s ratePerM=$%.4f ok=%v",
 				sku.Description, unit, ntiers, units, nanos, model, kindName(kind), ratePerM, ok)
 		}
 		if !ok || ratePerM <= 0 {
@@ -550,7 +588,7 @@ func kindFromDescription(desc string) tokenKind {
 var (
 	modelNoisePrefixRe = regexp.MustCompile(`(?i)^(ai dev tools:|cloud vertex ai model garden model as a service|cloud vertex ai|vertex ai|model garden|model as a service)\s*`)
 	// Trailing kind/qualifier words + everything after the first of them.
-	modelNoiseTailRe = regexp.MustCompile(`(?i)\s+(input|output|prompt|completion|response|cache|cached|context|token|tokens|count|batch|long|standard|write|read)\b.*$`)
+	modelNoiseTailRe = regexp.MustCompile(`(?i)\s+(input|output|prompt|completion|response|cache|cached|context|token|tokens|count|batch|flex|priority|long|standard|write|read)\b.*$`)
 	parensRe         = regexp.MustCompile(`\s*\(.*?\)\s*`)
 )
 
@@ -585,9 +623,8 @@ func cleanModelName(desc string) string {
 // whether the price is character-based (approximate). Returns "" model when it
 // can't confidently identify a Gen-AI token SKU.
 //
-// "Batch" SKUs are skipped: they are a distinct, cheaper async-pricing mode we
-// never use for interactive chat, and including them would understate the live
-// cost.
+// "Batch" SKUs are resolved with a :flex suffix so that the dynamic cost
+// estimator can look up the correct Batch/Flex prices on demand.
 func resolveSKU(sku rawSKU) (model string, kind tokenKind, approx bool) {
 	desc := sku.Description
 	d := strings.ToLower(desc)
@@ -610,9 +647,15 @@ func resolveSKU(sku rawSKU) (model string, kind tokenKind, approx bool) {
 		return "", kindUnknown, false
 	}
 
-	// Skip async/batch pricing — not what an interactive request is billed at.
-	if strings.Contains(d, "batch") {
-		return "", kindUnknown, false
+	// Tier detection from the raw description. The Cloud Billing catalog labels
+	// non-standard tiers in the SKU description (e.g. "... with Priority",
+	// "... Batch ..."). Batch and Flex share the discounted Flex/Batch tier.
+	tierSfx := ""
+	switch {
+	case strings.Contains(d, "priority"):
+		tierSfx = "priority"
+	case strings.Contains(d, "batch"), strings.Contains(d, "flex"):
+		tierSfx = "flex"
 	}
 
 	kind = kindFromDescription(desc)
@@ -631,7 +674,8 @@ func resolveSKU(sku rawSKU) (model string, kind tokenKind, approx bool) {
 	if fam == "" {
 		return "", kindUnknown, false
 	}
-	return normalizePriceKey(fam), kind, isChar && !isToken
+	key := normalizePriceKey(fam) + tierSfx
+	return key, kind, isChar && !isToken
 }
 
 // skuRatePerMillionTokens extracts the unit price and normalizes it to USD per
@@ -746,16 +790,106 @@ func parseClaudeCell(cell string) (input, output, cached float64) {
 	return
 }
 
+// htmlCommentRe matches HTML comments so they can be removed before parsing.
+var htmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// htmlH3Re matches a tier section heading on the pricing page, e.g.
+// <h3 id="priority" ...>Priority</h3> or <h3 id="flexbatch" ...>Flex/Batch</h3>.
+var htmlH3Re = regexp.MustCompile(`(?is)<h3\b[^>]*>(.*?)</h3>`)
+
+// tierForOffset classifies a byte offset in the HTML into a routing tier by
+// looking at the most recent <h3> heading before it. The live page renders one
+// table per tier, each preceded by its tier heading; rows before any tier
+// heading (or under a non-tier heading) are "standard".
+//
+// headings is a slice of (offset, tier) pairs sorted ascending by offset, where
+// tier is "" for headings that don't name a known tier (treated as standard).
+func tierForOffset(headings []struct {
+	off  int
+	tier string
+}, off int) string {
+	tier := ""
+	for _, h := range headings {
+		if h.off > off {
+			break
+		}
+		tier = h.tier
+	}
+	if tier == "" {
+		return "standard"
+	}
+	return tier
+}
+
+// tierSuffix maps a tier to the key suffix used in the pricing table. Standard
+// rates live under the bare model key; Priority/Flex get a suffix so the
+// estimator can look them up on demand. An unknown tier maps to standard.
+func tierSuffix(tier string) string {
+	switch tier {
+	case "priority":
+		return "priority"
+	case "flex":
+		return "flex"
+	default:
+		return ""
+	}
+}
+
+// batchFlexCacheRe extracts the Batch sub-rate from a combined Flex/Batch cached
+// cell such as "Batch: $0.075 (Global) Flex: $0.08 (Global)". The Batch rate is
+// the canonical Flex/Batch cached discount we model.
+var batchFlexCacheRe = regexp.MustCompile(`(?i)Batch:\s*\$([0-9.]+)`)
+
+// parseTierCachePrice extracts the cached-input rate from a cell. For Flex/Batch
+// cells that pack both "Batch:" and "Flex:" sub-rates it returns the Batch rate;
+// otherwise it falls back to the first plain "$" price in the cell.
+func parseTierCachePrice(cell string) float64 {
+	if m := batchFlexCacheRe.FindStringSubmatch(cell); len(m) > 1 {
+		var v float64
+		fmt.Sscanf(m[1], "%f", &v)
+		return v
+	}
+	return parseFirstPrice(cell)
+}
+
 func parseHTMLPricingContent(html string, table map[string]ModelPrice) error {
+	// Strip HTML comments first: they can contain literal "<h3>" / "<tr>" text
+	// (e.g. documentation snippets) that would otherwise corrupt the tier
+	// section attribution below.
+	html = htmlCommentRe.ReplaceAllString(html, "")
+
 	trRe := regexp.MustCompile(`(?i)<tr>([\s\S]*?)</tr>`)
 	tdRe := regexp.MustCompile(`(?i)<td[^>]*>([\s\S]*?)</td>`)
 
+	// Pre-scan tier section headings so each row can be attributed to its tier.
+	var headings []struct {
+		off  int
+		tier string
+	}
+	for _, loc := range htmlH3Re.FindAllStringSubmatchIndex(html, -1) {
+		text := strings.ToLower(cleanHTML(html[loc[2]:loc[3]]))
+		tier := ""
+		switch {
+		case strings.Contains(text, "priority"):
+			tier = "priority"
+		case strings.Contains(text, "flex"), strings.Contains(text, "batch"):
+			tier = "flex"
+		}
+		headings = append(headings, struct {
+			off  int
+			tier string
+		}{off: loc[0], tier: tier})
+	}
+
 	var currentModel string
+	var currentTier string
 	var currentModelPrice ModelPrice
 
-	trMatches := trRe.FindAllStringSubmatch(html, -1)
-	for _, trMatch := range trMatches {
-		trContent := trMatch[1]
+	trMatches := trRe.FindAllStringSubmatchIndex(html, -1)
+	for _, loc := range trMatches {
+		trContent := html[loc[2]:loc[3]]
+		rowTier := tierForOffset(headings, loc[0])
+
 		tdMatches := tdRe.FindAllStringSubmatch(trContent, -1)
 		if len(tdMatches) == 0 {
 			continue
@@ -772,9 +906,12 @@ func parseHTMLPricingContent(html string, table map[string]ModelPrice) error {
 		if isModel {
 			if len(cells) == 1 || (len(cells) > 1 && !strings.Contains(strings.ToLower(cells[1]), "input (") && !strings.Contains(strings.ToLower(cells[1]), "input:") && !strings.Contains(strings.ToLower(cells[1]), "output:")) {
 				currentModel = normalizePriceKey(firstCell)
+				currentTier = rowTier
 				currentModelPrice = ModelPrice{Source: "HTML Scraper"}
 			} else if len(cells) > 1 && (strings.Contains(strings.ToLower(cells[1]), "input:") || strings.Contains(strings.ToLower(cells[1]), "output:")) {
-				modelKey := normalizePriceKey(firstCell)
+				// Claude-style single-cell layout. Tier-suffix the key so
+				// Priority/Flex rows don't clobber the standard entry.
+				modelKey := normalizePriceKey(firstCell) + tierSuffix(rowTier)
 				input, output, cached := parseClaudeCell(tdMatches[1][1])
 				if input > 0 || output > 0 {
 					table[modelKey] = ModelPrice{
@@ -793,14 +930,21 @@ func parseHTMLPricingContent(html string, table map[string]ModelPrice) error {
 					currentModelPrice.InputPerM = parseFirstPrice(cells[1])
 				}
 				if len(cells) > 3 {
-					currentModelPrice.CachedPerM = parseFirstPrice(cells[3])
+					// The Flex/Batch cached cell packs "Batch: $.. Flex: $..";
+					// parseTierCachePrice picks the Batch sub-rate there and
+					// falls back to the first "$" price for plain cells.
+					currentModelPrice.CachedPerM = parseTierCachePrice(cells[3])
 				}
 			} else if strings.Contains(lowerFirst, "output") {
 				if len(cells) > 1 {
 					currentModelPrice.OutputPerM = parseFirstPrice(cells[1])
 				}
 				if currentModelPrice.InputPerM > 0 || currentModelPrice.OutputPerM > 0 {
-					table[currentModel] = currentModelPrice
+					// Route to the tier-suffixed key. A model that lists no
+					// price for this tier (all "N/A") yields 0/0 and is never
+					// written, so tier-not-offered models get no tier key and
+					// the estimator correctly falls back to standard.
+					table[currentModel+tierSuffix(currentTier)] = currentModelPrice
 				}
 				currentModel = ""
 			}

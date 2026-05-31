@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go.f0o.dev/cline-vertex-gw/provider"
 )
 
 // dummyHandler always returns 200 OK and echoes the body if any.
@@ -153,5 +155,86 @@ func TestRecoverMiddleware_CatchesPanic(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d; want 500", rec.Code)
+	}
+}
+
+func TestRoutingTierMiddleware(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  map[string]string
+		wantTier string
+	}{
+		{
+			name:     "no headers",
+			headers:  nil,
+			wantTier: "standard",
+		},
+		{
+			name:     "X-Routing-Tier standard",
+			headers:  map[string]string{"X-Routing-Tier": "standard"},
+			wantTier: "standard",
+		},
+		{
+			name:     "X-Routing-Tier Priority capitalized",
+			headers:  map[string]string{"X-Routing-Tier": "Priority"},
+			wantTier: "priority",
+		},
+		{
+			name:     "X-Vertex-AI-Routing-Tier priority",
+			headers:  map[string]string{"X-Vertex-AI-Routing-Tier": "priority"},
+			wantTier: "priority",
+		},
+		{
+			name:     "X-Routing-Tier Flex",
+			headers:  map[string]string{"X-Routing-Tier": "Flex"},
+			wantTier: "flex",
+		},
+		{
+			name:     "X-Routing-Tier Batch",
+			headers:  map[string]string{"X-Routing-Tier": "Batch"},
+			wantTier: "flex",
+		},
+		{
+			name:     "X-Routing-Tier flex/batch",
+			headers:  map[string]string{"X-Routing-Tier": "flex/batch"},
+			wantTier: "flex",
+		},
+		{
+			name:     "fallback empty or unknown to standard",
+			headers:  map[string]string{"X-Routing-Tier": "unknown-tier"},
+			wantTier: "standard",
+		},
+		{
+			name: "both headers (X-Routing-Tier takes precedence)",
+			headers: map[string]string{
+				"X-Routing-Tier":           "priority",
+				"X-Vertex-AI-Routing-Tier": "flex",
+			},
+			wantTier: "priority",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedTier string
+			probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tier, ok := r.Context().Value(provider.ContextKeyRoutingTier).(string); ok {
+					capturedTier = tier
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+
+			h := RoutingTierMiddleware(probe)
+			req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if capturedTier != tt.wantTier {
+				t.Errorf("got tier %q; want %q", capturedTier, tt.wantTier)
+			}
+		})
 	}
 }

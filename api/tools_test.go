@@ -374,3 +374,61 @@ func TestOpenAIStream_FinalChunkFinishToolCalls(t *testing.T) {
 		t.Errorf("final chunk missing tool_calls finish reason: %s", body)
 	}
 }
+
+func TestTranslateTools_SearchGrounding(t *testing.T) {
+	// 1. Test OpenAI Tools Translation
+	oaiTools := []OAIToolDef{
+		{
+			Type: "function",
+			Function: OAIToolFunctionDef{
+				Name: "google_search",
+			},
+		},
+		{
+			Type: "function",
+			Function: OAIToolFunctionDef{
+				Name: "custom_fn",
+			},
+		},
+	}
+
+	gotOAI := translateOAIToolsToGenai(oaiTools, nil)
+	if len(gotOAI) != 2 {
+		t.Fatalf("expected exactly 2 tools, got %d", len(gotOAI))
+	}
+
+	// First tool should be custom_fn, second should be GoogleSearchRetrieval
+	var hasFunc, hasSearch bool
+	for _, tool := range gotOAI {
+		if tool.GoogleSearchRetrieval != nil {
+			hasSearch = true
+		}
+		if len(tool.FunctionDeclarations) > 0 && tool.FunctionDeclarations[0].Name == "custom_fn" {
+			hasFunc = true
+		}
+	}
+	if !hasSearch {
+		t.Error("missing GoogleSearchRetrieval tool in OAI translation")
+	}
+	if !hasFunc {
+		t.Error("missing custom_fn tool in OAI translation")
+	}
+
+	// 2. Test Ollama Tools Translation
+	ollamaTools := []ToolDef{
+		{
+			Type: "function",
+			Function: ToolFunctionDef{
+				Name: "web_search",
+			},
+		},
+	}
+
+	gotOllama := translateOllamaToolsToGenai(ollamaTools)
+	if len(gotOllama) != 1 {
+		t.Fatalf("expected exactly 1 tool, got %d", len(gotOllama))
+	}
+	if gotOllama[0].GoogleSearchRetrieval == nil {
+		t.Error("expected GoogleSearchRetrieval tool in Ollama translation")
+	}
+}

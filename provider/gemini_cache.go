@@ -135,18 +135,30 @@ func (vc *VertexClient) MaybeApplyGeminiCache(ctx context.Context, modelName, sy
 	if config == nil {
 		return
 	}
+
+	prefixBytes := len(systemPrompt)
+	var toolsBytes int
+	if config.Tools != nil {
+		if b, err := json.Marshal(config.Tools); err == nil {
+			toolsBytes = len(b)
+			prefixBytes += toolsBytes
+		}
+	}
+
+	slog.DebugContext(ctx, "gemini cache evaluation",
+		slog.Bool("planCacheSystem", plan.CacheSystem),
+		slog.Int("systemPromptBytes", len(systemPrompt)),
+		slog.Int("toolsBytes", toolsBytes),
+		slog.Int("combinedBytes", prefixBytes),
+		slog.Int("thresholdBytes", int(geminiCacheMinBytes)),
+	)
+
 	// Cheap gates first (no client needed): only proceed when the planner
 	// judged the system prefix worth caching AND it clears the Gemini
 	// explicit-cache minimum (higher than the inline-marker minimum), to avoid
 	// a create the API would reject as too small.
 	if !plan.CacheSystem {
 		return
-	}
-	prefixBytes := len(systemPrompt)
-	if config.Tools != nil {
-		if b, err := json.Marshal(config.Tools); err == nil {
-			prefixBytes += len(b)
-		}
 	}
 	if int32(prefixBytes) < geminiCacheMinBytes {
 		return

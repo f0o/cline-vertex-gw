@@ -5,8 +5,13 @@ import (
 	"sync"
 	"time"
 
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"google.golang.org/genai"
 )
+
+// logTags is the component-scoped logger for the /api/tags model discovery and
+// caching subsystem. Every record carries component=tags for easy filtering.
+var logTags = logx.For("tags")
 
 // /api/tags TTL cache.
 //
@@ -108,7 +113,60 @@ func (vc *VertexClient) ListModelsCached(ctx context.Context) ([]*genai.Model, e
 	tagsCache.mu.Lock()
 	tagsCache.entry = &tagsCacheEntry{models: models, at: time.Now()}
 	tagsCache.mu.Unlock()
+	// Persist to the on-disk cache so a restart can serve the model list
+	// immediately without re-running the multi-publisher discovery fan-out.
+	if err := writeFSCache(modelsCacheFile, models); err != nil {
+		logTags.Error("writing on-disk cache failed", "error", err)
+	}
 	return models, nil
+}
+
+// WarmModels primes the model catalog at startup. It lazily refreshes from the
+// on-disk filesystem cache: if a cache file exists and is younger than the
+// configured TTL (default 1 day) the model list is loaded from disk and seeded
+// into the in-memory tags cache with no live discovery; otherwise it runs the
+// live ListModels fan-out and persists the fresh result for the next startup.
+//
+// Best-effort: any error is logged and swallowed so a discovery hiccup or a
+// missing cache directory never aborts boot.
+func (vc *VertexClient) WarmModels(ctx context.Context) {
+	if vc == nil {
+		return
+	}
+
+	// 1. Try the on-disk cache first.
+	var cached []*genai.Model
+	if fresh, err := readFSCache(modelsCacheFile, &cached); err != nil {
+		logTags.Warn("reading on-disk cache failed; will discover live", "error", err)
+	} else if fresh && len(cached) > 0 {
+		tagsCache.mu.Lock()
+		tagsCache.entry = &tagsCacheEntry{models: cached, at: time.Now()}
+		tagsCache.mu.Unlock()
+		logTags.Info("loaded models from on-disk cache", "count", len(cached), "source", "fs-cache-fresh")
+		return
+	}
+
+	// 2. Cache missing or stale: discover live, then persist the fresh list.
+	models, err := vc.ListModels(ctx)
+	if err != nil {
+		logTags.Warn("startup warm failed; model list unavailable until next poll", "error", err)
+		// Fall back to a stale on-disk copy if we have one — a stale list is
+		// better than an empty picker until the next live poll.
+		if len(cached) > 0 {
+			tagsCache.mu.Lock()
+			tagsCache.entry = &tagsCacheEntry{models: cached, at: time.Now()}
+			tagsCache.mu.Unlock()
+			logTags.Warn("serving stale on-disk cache after discovery failure", "count", len(cached))
+		}
+		return
+	}
+	tagsCache.mu.Lock()
+	tagsCache.entry = &tagsCacheEntry{models: models, at: time.Now()}
+	tagsCache.mu.Unlock()
+	if err := writeFSCache(modelsCacheFile, models); err != nil {
+		logTags.Error("writing on-disk cache failed", "error", err)
+	}
+	logTags.Info("discovered models live and cached to disk", "count", len(models))
 }
 
 // InvalidateTagsCache drops the cached entry, forcing the next call to

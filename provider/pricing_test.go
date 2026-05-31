@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"context"
 	"math"
+	"os"
 	"testing"
 )
 
@@ -92,9 +94,14 @@ func TestResolveSKU(t *testing.T) {
 		}
 	}
 
-	// Batch SKUs must be skipped (async pricing, not interactive).
-	if m, _, _ := resolveSKU(mkSKU("Llama 4 Scout Batch Input Token", "count", "0", 125)); m != "" {
-		t.Errorf("expected Batch SKU to be skipped, got model=%q", m)
+	// Batch SKUs must be resolved with the flex suffix.
+	if m, _, _ := resolveSKU(mkSKU("Llama 4 Scout Batch Input Token", "count", "0", 125)); m != "llama4scoutflex" {
+		t.Errorf("expected Batch SKU to resolve with flex suffix, got model=%q", m)
+	}
+
+	// Priority SKUs must be resolved with the priority suffix.
+	if m, _, _ := resolveSKU(mkSKU("Gemini 3.5 Flash Input Token Count with Priority", "count", "0", 2700)); m != "gemini35flashpriority" {
+		t.Errorf("expected Priority SKU to resolve with priority suffix, got model=%q", m)
 	}
 
 	// Cache WRITE SKUs are skipped (one-time surcharge, not the cached read rate).
@@ -202,7 +209,7 @@ func TestRealClaudeOpusSKUs(t *testing.T) {
 	// 100K output.
 	pricing.setTable(table)
 	defer pricing.setTable(map[string]ModelPrice{})
-	bd, ok := EstimateCost("claude-opus-4-8", 1_000_000, 200_000, 100_000)
+	bd, ok := EstimateCost(context.Background(), "claude-opus-4-8", 1_000_000, 200_000, 100_000)
 	if !ok {
 		t.Fatalf("expected estimate for claude-opus-4-8")
 	}
@@ -245,7 +252,7 @@ func TestMergeAndEstimate(t *testing.T) {
 	}
 
 	// 1,000,000 prompt (200,000 cached), 500,000 completion.
-	bd, ok := EstimateCost("gemini-2.5-pro", 1_000_000, 200_000, 500_000)
+	bd, ok := EstimateCost(context.Background(), "gemini-2.5-pro", 1_000_000, 200_000, 500_000)
 	if !ok {
 		t.Fatalf("expected estimate")
 	}
@@ -268,7 +275,7 @@ func TestMergeAndEstimate(t *testing.T) {
 
 func TestEstimateUnknownModel(t *testing.T) {
 	pricing.setTable(map[string]ModelPrice{})
-	if _, ok := EstimateCost("nonexistent-model-x", 100, 0, 100); ok {
+	if _, ok := EstimateCost(context.Background(), "nonexistent-model-x", 100, 0, 100); ok {
 		t.Errorf("expected ok=false for unknown model")
 	}
 }
@@ -282,7 +289,7 @@ func TestCachedFallbackToInput(t *testing.T) {
 	pricing.setTable(table)
 	defer pricing.setTable(map[string]ModelPrice{})
 
-	bd, ok := EstimateCost("llama-3.1-405b", 1_000_000, 500_000, 0)
+	bd, ok := EstimateCost(context.Background(), "llama-3.1-405b", 1_000_000, 500_000, 0)
 	if !ok {
 		t.Fatalf("expected estimate")
 	}
@@ -306,6 +313,67 @@ func TestLongestMatchLookup(t *testing.T) {
 	// A preview/dated variant should still resolve to the base entry.
 	if _, ok := LookupPrice("gemini-2.5-pro-preview-05-06"); !ok {
 		t.Errorf("expected longest-match to resolve preview variant")
+	}
+}
+
+// TestScrapeHTMLPricingTiers drives the parser from a fixture captured verbatim
+// from the live Vertex pricing page, which renders one table PER tier (Standard,
+// Priority, Flex/Batch) each preceded by an <h3> heading. The parser must route
+// each tier's rates into the correct tier-suffixed key and must NOT let a later
+// table (Flex/Batch) clobber the standard rates — the historical bug where
+// gemini35flash reported the flex price as its standard price.
+func TestScrapeHTMLPricingTiers(t *testing.T) {
+	html, err := os.ReadFile("testdata/gemini_pricing.html")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	table := map[string]ModelPrice{}
+	if err := parseHTMLPricingContent(string(html), table); err != nil {
+		t.Fatalf("parser failed: %v", err)
+	}
+
+	// Standard tier -> base key, must be the standard (not flex) rates.
+	std, ok := table["gemini35flash"]
+	if !ok {
+		t.Fatalf("expected gemini35flash (standard) in table")
+	}
+	if !approxEq(std.InputPerM, 1.50) || !approxEq(std.OutputPerM, 9.00) || !approxEq(std.CachedPerM, 0.15) {
+		t.Errorf("standard gemini35flash = in:%v out:%v cached:%v, want 1.50/9.00/0.15",
+			std.InputPerM, std.OutputPerM, std.CachedPerM)
+	}
+
+	// Priority tier -> :priority key.
+	pri, ok := table["gemini35flashpriority"]
+	if !ok {
+		t.Fatalf("expected gemini35flashpriority in table")
+	}
+	if !approxEq(pri.InputPerM, 2.70) || !approxEq(pri.OutputPerM, 16.20) || !approxEq(pri.CachedPerM, 0.27) {
+		t.Errorf("priority gemini35flash = in:%v out:%v cached:%v, want 2.70/16.20/0.27",
+			pri.InputPerM, pri.OutputPerM, pri.CachedPerM)
+	}
+
+	// Flex/Batch tier -> :flex key. The cached cell packs "Batch: $0.075 ...
+	// Flex: $0.08 ..."; the Batch rate is the canonical Flex/Batch discount.
+	flex, ok := table["gemini35flashflex"]
+	if !ok {
+		t.Fatalf("expected gemini35flashflex in table")
+	}
+	if !approxEq(flex.InputPerM, 0.75) || !approxEq(flex.OutputPerM, 4.50) || !approxEq(flex.CachedPerM, 0.075) {
+		t.Errorf("flex gemini35flash = in:%v out:%v cached:%v, want 0.75/4.50/0.075",
+			flex.InputPerM, flex.OutputPerM, flex.CachedPerM)
+	}
+
+	// Tier-not-offered: Gemini 3 Pro Image has N/A for priority/flex, so only
+	// the base (standard) key must exist — no :priority / :flex keys.
+	if _, ok := table["gemini3proimage"]; !ok {
+		t.Errorf("expected gemini3proimage (standard) in table")
+	}
+	if _, ok := table["gemini3proimagepriority"]; ok {
+		t.Errorf("gemini3proimage must NOT have a priority key (all N/A)")
+	}
+	if _, ok := table["gemini3proimageflex"]; ok {
+		t.Errorf("gemini3proimage must NOT have a flex key (all N/A)")
 	}
 }
 
@@ -403,5 +471,76 @@ func TestVersionAgnosticFallback(t *testing.T) {
 		t.Errorf("expected version-agnostic match for claude-opus-4.8")
 	} else if mp.InputPerM != 15.00 {
 		t.Errorf("got InputPerM = %v, want 15.00", mp.InputPerM)
+	}
+}
+
+func TestFlexPricingLookup(t *testing.T) {
+	table := map[string]ModelPrice{
+		"gemini25pro":     {InputPerM: 1.25, OutputPerM: 10.0},
+		"gemini25proflex": {InputPerM: 0.625, OutputPerM: 5.0}, // Scraped 50% discount rate from billing api!
+	}
+
+	pricing.setTable(table)
+	defer pricing.setTable(map[string]ModelPrice{})
+
+	// Test 1: Standard context lookup -> Should return gemini25pro rates ($1.25, $10.0)
+	bd, ok := EstimateCost(context.Background(), "gemini-2.5-pro", 1_000_000, 0, 500_000)
+	if !ok {
+		t.Fatalf("expected estimate")
+	}
+	if !approxEq(bd.InputPerM, 1.25) || !approxEq(bd.OutputPerM, 10.0) {
+		t.Errorf("expected standard rates (1.25, 10.0), got (%v, %v)", bd.InputPerM, bd.OutputPerM)
+	}
+
+	// Test 2: Flex context lookup -> Should return gemini25pro:flex rates ($0.625, $5.0)
+	ctxFlex := context.WithValue(context.Background(), ContextKeyRoutingTier, "flex")
+	bdFlex, ok := EstimateCost(ctxFlex, "gemini-2.5-pro", 1_000_000, 0, 500_000)
+	if !ok {
+		t.Fatalf("expected flex estimate")
+	}
+	if !approxEq(bdFlex.InputPerM, 0.625) || !approxEq(bdFlex.OutputPerM, 5.0) {
+		t.Errorf("expected flex/batch rates (0.625, 5.0), got (%v, %v)", bdFlex.InputPerM, bdFlex.OutputPerM)
+	}
+}
+
+// TestPriorityPricingLookup verifies the Priority tier is distinguished from
+// Standard, and that a model offering NO priority tier falls back to standard.
+func TestPriorityPricingLookup(t *testing.T) {
+	table := map[string]ModelPrice{
+		"gemini35flash":         {InputPerM: 1.50, OutputPerM: 9.0},  // standard
+		"gemini35flashpriority": {InputPerM: 2.70, OutputPerM: 16.2}, // premium priority
+		"gemini25pro":           {InputPerM: 1.25, OutputPerM: 10.0}, // standard only (no priority key)
+	}
+
+	pricing.setTable(table)
+	defer pricing.setTable(map[string]ModelPrice{})
+
+	// Priority tier -> the premium :priority rates (NOT the standard rates).
+	ctxPri := context.WithValue(context.Background(), ContextKeyRoutingTier, "priority")
+	bdPri, ok := EstimateCost(ctxPri, "gemini-3.5-flash", 1_000_000, 0, 500_000)
+	if !ok {
+		t.Fatalf("expected priority estimate")
+	}
+	if !approxEq(bdPri.InputPerM, 2.70) || !approxEq(bdPri.OutputPerM, 16.2) {
+		t.Errorf("expected priority rates (2.70, 16.2), got (%v, %v)", bdPri.InputPerM, bdPri.OutputPerM)
+	}
+
+	// Standard tier on the same model -> standard rates.
+	bdStd, ok := EstimateCost(context.Background(), "gemini-3.5-flash", 1_000_000, 0, 500_000)
+	if !ok {
+		t.Fatalf("expected standard estimate")
+	}
+	if !approxEq(bdStd.InputPerM, 1.50) || !approxEq(bdStd.OutputPerM, 9.0) {
+		t.Errorf("expected standard rates (1.50, 9.0), got (%v, %v)", bdStd.InputPerM, bdStd.OutputPerM)
+	}
+
+	// Tier-not-offered: gemini25pro has no priority key, so a priority request
+	// must fall back to the standard rate rather than fail or report nothing.
+	bdFallback, ok := EstimateCost(ctxPri, "gemini-2.5-pro", 1_000_000, 0, 500_000)
+	if !ok {
+		t.Fatalf("expected fallback estimate for model without priority tier")
+	}
+	if !approxEq(bdFallback.InputPerM, 1.25) || !approxEq(bdFallback.OutputPerM, 10.0) {
+		t.Errorf("expected standard fallback (1.25, 10.0), got (%v, %v)", bdFallback.InputPerM, bdFallback.OutputPerM)
 	}
 }

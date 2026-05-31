@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -56,7 +55,7 @@ func (h *APIHandler) TagsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Vertex == nil {
-		rl.Logf("aborting: Vertex client not configured")
+		rl.Errorf("aborting: Vertex client not configured")
 		http.Error(w, "Vertex AI client not configured", http.StatusInternalServerError)
 		return
 	}
@@ -64,7 +63,7 @@ func (h *APIHandler) TagsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vertexModels, err := h.Vertex.ListModelsCached(ctx)
 	if err != nil {
-		rl.Logf("error fetching models: %v", err)
+		rl.Errorf("error fetching models: %v", err)
 		http.Error(w, "Error fetching models from Vertex AI", http.StatusInternalServerError)
 		return
 	}
@@ -95,7 +94,7 @@ func (h *APIHandler) TagsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(TagsResponse{Models: out}); err != nil {
-		rl.Logf("encode response: %v", err)
+		rl.Errorf("encode response: %v", err)
 		return
 	}
 	rl.Logf("served %d models in %v", len(out), rl.Elapsed())
@@ -174,7 +173,7 @@ func (h *APIHandler) runStreamWithRetry(
 		if attempt > 0 {
 			class := classifyError(lastErr)
 			MetricsRetry(class)
-			rl.Logf("stream retry attempt=%d after error class=%s err=%v",
+			rl.Warnf("stream retry attempt=%d after error class=%s err=%v",
 				attempt, class, lastErr)
 			if werr := cfg.waitFor(ctx, attempt-1); werr != nil {
 				return metrics, werr
@@ -249,7 +248,7 @@ func (h *APIHandler) runStreamWithRetry(
 						if !loopFired && detector.LoopDetected() {
 							loopFired = true
 							MetricsLoopDetectorFired()
-							rl.Logf("loop detector fired after %d output tokens; cancelling stream",
+							rl.Warnf("loop detector fired after %d output tokens; cancelling stream",
 								metrics.completionTokens)
 							cancel()
 						}
@@ -273,13 +272,13 @@ func (h *APIHandler) runStreamWithRetry(
 		lastErr = iterErr
 		if gotChunk {
 			// Chunks were emitted; we cannot safely retry.
-			rl.Logf("stream aborted after partial output (class=%s): %v",
+			rl.Warnf("stream aborted after partial output (class=%s): %v",
 				classifyError(iterErr), iterErr)
 			metrics.end = time.Now()
 			return metrics, iterErr
 		}
 		if !isRetryableError(iterErr) {
-			rl.Logf("stream non-retryable error (class=%s): %v",
+			rl.Errorf("stream non-retryable error (class=%s): %v",
 				classifyError(iterErr), iterErr)
 			metrics.end = time.Now()
 			return metrics, iterErr
@@ -307,7 +306,7 @@ func (h *APIHandler) runNonStreamWithRetry(
 		if attempt > 0 {
 			class := classifyError(lastErr)
 			MetricsRetry(class)
-			rl.Logf("non-stream retry attempt=%d after error class=%s err=%v",
+			rl.Warnf("non-stream retry attempt=%d after error class=%s err=%v",
 				attempt, class, lastErr)
 			if werr := cfg.waitFor(ctx, attempt-1); werr != nil {
 				return nil, metrics, werr
@@ -330,7 +329,7 @@ func (h *APIHandler) runNonStreamWithRetry(
 		}
 		lastErr = err
 		if !isRetryableError(err) {
-			rl.Logf("non-stream non-retryable error (class=%s): %v", classifyError(err), err)
+			rl.Errorf("non-stream non-retryable error (class=%s): %v", classifyError(err), err)
 			metrics.end = time.Now()
 			return nil, metrics, err
 		}
@@ -486,7 +485,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Vertex == nil {
-		rl.Logf("aborting: Vertex client not configured")
+		rl.Errorf("aborting: Vertex client not configured")
 		http.Error(w, "Vertex AI client not configured", http.StatusInternalServerError)
 		return
 	}
@@ -502,7 +501,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		rl.Logf("read body: %v", err)
+		rl.Errorf("read body: %v", err)
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
@@ -511,7 +510,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
 
 	if err := json.Unmarshal(body, &req); err != nil {
-		rl.Logf("parse body: %v", err)
+		rl.Errorf("parse body: %v", err)
 		http.Error(w, "Error parsing JSON body", http.StatusBadRequest)
 		return
 	}
@@ -530,17 +529,17 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		// Image-decode failures and per-request image-budget overruns land
 		// here. 400 with the decoded error message so the caller can fix
 		// the request (e.g. shrink the image, use a supported format).
-		rl.Logf("rejected: build contents: %v", bcerr)
+		rl.Errorf("rejected: build contents: %v", bcerr)
 		http.Error(w, bcerr.Error(), http.StatusBadRequest)
 		return
 	}
 	if len(contents) == 0 {
-		rl.Logf("rejected: no valid messages")
+		rl.Errorf("rejected: no valid messages")
 		http.Error(w, "No valid messages provided", http.StatusBadRequest)
 		return
 	}
 	if capErr := provider.CheckVisionSupport(req.Model, contents); capErr != nil {
-		rl.Logf("rejected: vision capability: %v", capErr)
+		rl.Errorf("rejected: vision capability: %v", capErr)
 		http.Error(w, capErr.Error(), http.StatusBadRequest)
 		return
 	}
@@ -551,7 +550,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			rl.Logf("streaming unsupported by responseWriter")
+			rl.Errorf("streaming unsupported by responseWriter")
 			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 			return
 		}
@@ -604,7 +603,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// Try to surface the error via the stream if at all possible; if
 			// the client already disconnected this is best-effort.
-			rl.Logf("stream failed class=%s err=%v", classifyError(err), err)
+			rl.Errorf("stream failed class=%s err=%v", classifyError(err), err)
 			_ = enc.Encode(map[string]string{"error": fmt.Sprintf("Vertex AI stream error: %v", err)})
 			flusher.Flush()
 			return
@@ -641,10 +640,10 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		provider.DebugLogPayload(ctx, "outbound_response_chunk", done)
 		if err := enc.Encode(done); err != nil {
-			rl.Logf("encode done: %v", err)
+			rl.Errorf("encode done: %v", err)
 		}
 		flusher.Flush()
-		logCompletionForModel(rl, "chat-stream", req.Model, metrics)
+		logCompletionForModel(ctx, rl, "chat-stream", req.Model, metrics)
 		return
 	}
 
@@ -652,7 +651,7 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp, metrics, err := h.runNonStreamWithRetry(ctx, rl, req.Model, systemPrompt, contents, genOpts)
 	if err != nil {
-		rl.Logf("non-stream failed class=%s err=%v", classifyError(err), err)
+		rl.Errorf("non-stream failed class=%s err=%v", classifyError(err), err)
 		http.Error(w, fmt.Sprintf("Error generating content: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -691,9 +690,9 @@ func (h *APIHandler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	provider.DebugLogPayload(ctx, "outbound_response", chatResp)
 	if err := json.NewEncoder(w).Encode(chatResp); err != nil {
-		rl.Logf("encode response: %v", err)
+		rl.Errorf("encode response: %v", err)
 	}
-	logCompletionForModel(rl, "chat", req.Model, metrics)
+	logCompletionForModel(ctx, rl, "chat", req.Model, metrics)
 }
 
 func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
@@ -708,7 +707,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Vertex == nil {
-		rl.Logf("aborting: Vertex client not configured")
+		rl.Errorf("aborting: Vertex client not configured")
 		http.Error(w, "Vertex AI client not configured", http.StatusInternalServerError)
 		return
 	}
@@ -721,7 +720,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		rl.Logf("read body: %v", err)
+		rl.Errorf("read body: %v", err)
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
@@ -729,7 +728,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req GenerateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		rl.Logf("parse body: %v", err)
+		rl.Errorf("parse body: %v", err)
 		http.Error(w, "Error parsing JSON body", http.StatusBadRequest)
 		return
 	}
@@ -755,7 +754,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			rl.Logf("streaming unsupported by responseWriter")
+			rl.Errorf("streaming unsupported by responseWriter")
 			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 			return
 		}
@@ -802,7 +801,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 
 		metrics, err := h.runStreamWithRetry(ctx, rl, req.Model, req.System, contents, genOpts, onChunk)
 		if err != nil {
-			rl.Logf("stream failed class=%s err=%v", classifyError(err), err)
+			rl.Errorf("stream failed class=%s err=%v", classifyError(err), err)
 			_ = enc.Encode(map[string]string{"error": fmt.Sprintf("Vertex AI stream error: %v", err)})
 			flusher.Flush()
 			return
@@ -839,10 +838,10 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		provider.DebugLogPayload(ctx, "outbound_response_chunk", done)
 		if err := enc.Encode(done); err != nil {
-			rl.Logf("encode done: %v", err)
+			rl.Errorf("encode done: %v", err)
 		}
 		flusher.Flush()
-		logCompletionForModel(rl, "generate-stream", req.Model, metrics)
+		logCompletionForModel(ctx, rl, "generate-stream", req.Model, metrics)
 		return
 	}
 
@@ -850,7 +849,7 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp, metrics, err := h.runNonStreamWithRetry(ctx, rl, req.Model, req.System, contents, genOpts)
 	if err != nil {
-		rl.Logf("non-stream failed class=%s err=%v", classifyError(err), err)
+		rl.Errorf("non-stream failed class=%s err=%v", classifyError(err), err)
 		http.Error(w, fmt.Sprintf("Error generating content: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -883,9 +882,9 @@ func (h *APIHandler) GenerateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	provider.DebugLogPayload(ctx, "outbound_response", genResp)
 	if err := json.NewEncoder(w).Encode(genResp); err != nil {
-		rl.Logf("encode response: %v", err)
+		rl.Errorf("encode response: %v", err)
 	}
-	logCompletionForModel(rl, "generate", req.Model, metrics)
+	logCompletionForModel(ctx, rl, "generate", req.Model, metrics)
 }
 
 // doneReason normalizes Vertex finish reasons into Ollama-style strings.
@@ -917,13 +916,13 @@ func doneReason(vertexReason string) string {
 // logCompletionForModel wraps this with model labels so the per-model token
 // counters get populated; callers that only know the route (not the model)
 // can use logCompletion which feeds duration-only metrics.
-func logCompletionForModel(rl *reqLogger, label, model string, m callMetrics) {
+func logCompletionForModel(ctx context.Context, rl *reqLogger, label, model string, m callMetrics) {
 	logCompletion(rl, label, m)
 	if model != "" {
 		MetricsTokens("prompt", model, m.promptTokens-m.cachedPromptTokens)
 		MetricsTokens("cached", model, m.cachedPromptTokens)
 		MetricsTokens("completion", model, m.completionTokens)
-		logAndMeterCost(rl, label, model, m)
+		logAndMeterCost(ctx, rl, label, model, m)
 	}
 	total, _, _, _ := m.finalize()
 	MetricsRequest(label, doneReason(m.finishReason), float64(total)/1e9)
@@ -935,25 +934,28 @@ func logCompletionForModel(rl *reqLogger, label, model string, m callMetrics) {
 // metric. When pricing for the model is unknown it prints "cost=unavailable"
 // and skips the metric (no $0 noise). Cached prompt tokens are billed at the
 // reduced cached-input rate; the remaining prompt tokens at the input rate.
-func logAndMeterCost(rl *reqLogger, label, model string, m callMetrics) {
-	bd, ok := provider.EstimateCost(model, m.promptTokens, m.cachedPromptTokens, m.completionTokens)
+func logAndMeterCost(ctx context.Context, rl *reqLogger, label, model string, m callMetrics) {
+	bd, ok := provider.EstimateCost(ctx, model, m.promptTokens, m.cachedPromptTokens, m.completionTokens)
 	if !ok {
-		log.Printf("[%s req=%s] cost=unavailable (no pricing for model=%q)", label, rl.id, model)
+		rl.L().Info("cost unavailable", "phase", label, "model", model, "reason", "no-pricing")
 		return
 	}
-	approx := ""
-	if bd.Approx {
-		approx = " (approx)"
-	}
-	log.Printf("[%s req=%s] cost%s total=$%.6f input=$%.6f cached=$%.6f output=$%.6f "+
-		"rates_per_mtok(in/cached/out)=$%.3f/$%.3f/$%.3f src=%q",
-		label, rl.id, approx,
-		bd.TotalUSD, bd.InputUSD, bd.CachedUSD, bd.OutputUSD,
-		bd.InputPerM, bd.CachedPerM, bd.OutputPerM, bd.Source,
+	rl.L().Info("cost estimate",
+		"phase", label, "model", model, "approx", bd.Approx,
+		"total_usd", bd.TotalUSD, "input_usd", bd.InputUSD,
+		"cached_usd", bd.CachedUSD, "output_usd", bd.OutputUSD,
+		"input_per_mtok", bd.InputPerM, "cached_per_mtok", bd.CachedPerM,
+		"output_per_mtok", bd.OutputPerM, "src", bd.Source,
 	)
-	MetricsEstimatedCost("input", model, bd.InputUSD)
-	MetricsEstimatedCost("cached", model, bd.CachedUSD)
-	MetricsEstimatedCost("output", model, bd.OutputUSD)
+	tier := "standard"
+	if ctx != nil {
+		if t, ok := ctx.Value(provider.ContextKeyRoutingTier).(string); ok && t != "" {
+			tier = t
+		}
+	}
+	MetricsEstimatedCost("input", model, tier, bd.InputUSD)
+	MetricsEstimatedCost("cached", model, tier, bd.CachedUSD)
+	MetricsEstimatedCost("output", model, tier, bd.OutputUSD)
 }
 
 func logCompletion(rl *reqLogger, label string, m callMetrics) {
@@ -966,12 +968,16 @@ func logCompletion(rl *reqLogger, label string, m callMetrics) {
 	if m.promptTokens > 0 {
 		cachedPct = 100.0 * float64(m.cachedPromptTokens) / float64(m.promptTokens)
 	}
-	log.Printf("[%s req=%s] done total=%s load=%s eval=%s prompt_tok=%d cached_tok=%d cached_pct=%.0f%% eval_tok=%d tps=%.1f reason=%s",
-		label, rl.id,
-		time.Duration(total).Truncate(time.Millisecond),
-		time.Duration(load).Truncate(time.Millisecond),
-		time.Duration(evalDur).Truncate(time.Millisecond),
-		m.promptTokens, m.cachedPromptTokens, cachedPct, m.completionTokens, tps,
-		doneReason(m.finishReason),
+	rl.L().Info("request done",
+		"phase", label,
+		"total", time.Duration(total).Truncate(time.Millisecond).String(),
+		"load", time.Duration(load).Truncate(time.Millisecond).String(),
+		"eval", time.Duration(evalDur).Truncate(time.Millisecond).String(),
+		"prompt_tok", m.promptTokens,
+		"cached_tok", m.cachedPromptTokens,
+		"cached_pct", cachedPct,
+		"eval_tok", m.completionTokens,
+		"tps", tps,
+		"reason", doneReason(m.finishReason),
 	)
 }

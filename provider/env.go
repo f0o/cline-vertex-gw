@@ -1,11 +1,12 @@
 package provider
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.f0o.dev/cline-vertex-gw/logx"
 )
 
 // Centralized environment-variable parsing helpers for the provider package.
@@ -29,9 +30,11 @@ func envBool(name string, def bool) bool {
 	case "0", "false", "no", "off":
 		return false
 	default:
-		log.Printf("invalid %s=%q (want bool); using default %v", name, v, def)
+		logx.Warn("invalid env value (want bool); using default",
+			"env", name, "value", v, "default", def)
 		return def
 	}
+
 }
 
 // envInt32 parses a non-negative int32 env var with a default. Logs and
@@ -44,9 +47,11 @@ func envInt32(name string, def int32) int32 {
 	}
 	n, err := strconv.ParseInt(v, 10, 32)
 	if err != nil || n < 0 {
-		log.Printf("invalid %s=%q (want non-negative int); using default %d", name, v, def)
+		logx.Warn("invalid env value (want non-negative int); using default",
+			"env", name, "value", v, "default", def)
 		return def
 	}
+
 	return int32(n)
 }
 
@@ -63,4 +68,28 @@ func envDurationSeconds(name string, def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(n) * time.Second
+}
+
+// envString reads an env var as a string. Returns def when unset.
+func envString(name string, def string) string {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// envFloat32 parses a float32 env var. Returns def when unset or invalid.
+func envFloat32(name string, def float32) float32 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 32)
+	if err != nil {
+		logx.Warn("invalid env value (want float); using default",
+			"env", name, "value", v, "default", def)
+		return def
+	}
+	return float32(f)
 }

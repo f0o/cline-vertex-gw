@@ -2,11 +2,14 @@ package provider
 
 import (
 	"fmt"
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logDedupSub scopes pipeline-compression logs to component=dedup-substring (DEBUG: per-request diagnostics).
+var logDedupSub = logx.Scoped("dedup-substring")
 
 // Whole-block dedup (DedupReplayedBlocks) only fires on EXACT matches: the
 // later text part must be byte-identical to an earlier one. In real Cline
@@ -142,7 +145,7 @@ func DedupSubstringBlocks(contents []*genai.Content) []*genai.Content {
 		out[i] = nc
 	}
 	if replacedCount > 0 {
-		log.Printf("[dedup-substring] collapsed %d embedded block(s), saved ~%dB",
+		logDedupSub.Debugf("collapsed %d embedded block(s), saved ~%dB",
 			replacedCount, totalSaved)
 	}
 	return out

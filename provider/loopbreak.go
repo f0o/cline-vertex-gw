@@ -1,11 +1,14 @@
 package provider
 
 import (
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// logLoopbreak scopes pipeline-compression logs to component=loopbreak (DEBUG: per-request diagnostics).
+var logLoopbreak = logx.Scoped("loopbreak")
 
 // LLM loop-trap resolution knobs.
 //
@@ -108,12 +111,12 @@ func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
 		if k {
 			out = append(out, contents[i])
 		} else if contents[i] != nil {
-			log.Printf("[loopbreak] dropped stale loop-trap turn %d: role=%s", i, contents[i].Role)
+			logLoopbreak.Debugf("dropped stale loop-trap turn %d: role=%s", i, contents[i].Role)
 		}
 	}
 
 	if droppedCount > 0 {
-		log.Printf("[loopbreak] removed %d duplicate/empty loop-trap turns from history", droppedCount)
+		logLoopbreak.Debugf("removed %d duplicate/empty loop-trap turns from history", droppedCount)
 	}
 
 	// 3. Nudge the model on the last turn if it's a scolding turn
@@ -128,7 +131,7 @@ func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
 					// Check if we haven't already appended the nudge
 					if !strings.Contains(p.Text, "If you have no other tools to call") {
 						p.Text += nudgeText
-						log.Printf("[loopbreak] appended loop-break action placeholder nudge to last user turn")
+						logLoopbreak.Debugf("appended loop-break action placeholder nudge to last user turn")
 					}
 					break
 				}

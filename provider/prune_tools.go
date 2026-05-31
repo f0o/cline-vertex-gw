@@ -1,12 +1,15 @@
 package provider
 
 import (
-	"log"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"sort"
 	"strconv"
 
 	"google.golang.org/genai"
 )
+
+// logPruneTools scopes pipeline-compression logs to component=prune-tools (DEBUG: per-request diagnostics).
+var logPruneTools = logx.Scoped("prune-tools")
 
 // Agentic sessions re-inspect the same things repeatedly: the model calls
 // `read_file` on main.go, edits it, then `read_file`s it again to confirm;
@@ -107,13 +110,13 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 	for i, c := range contents {
 		if remove[i] {
 			if c != nil {
-				log.Printf("[prune-tools] dropped superseded read-only tool turn %d: role=%s", i, c.Role)
+				logPruneTools.Debugf("dropped superseded read-only tool turn %d: role=%s", i, c.Role)
 			}
 			continue
 		}
 		out = append(out, c)
 	}
-	log.Printf("[prune-tools] removed %d superseded read-only tool turn(s)", len(remove))
+	logPruneTools.Debugf("removed %d superseded read-only tool turn(s)", len(remove))
 	return out
 }
 

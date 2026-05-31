@@ -1,0 +1,161 @@
+<!-- Trimmed fixture extracted from the live Vertex AI generative-ai pricing page.
+     Captures the real three-tables-per-tier structure:
+       1. Standard  (no tier <h3>; the model-group table)
+       2. <h3>Priority</h3>
+       3. <h3>Flex/Batch</h3>
+     Two models are kept:
+       - Gemini 3.5 Flash : full tier coverage (standard/priority/flex)
+       - Gemini 3 Pro Image: N/A for priority/flex (tier-not-offered case) -->
+<section>
+  <h2 id="text">Text</h2>
+  <table class="style0">
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Type</th>
+        <th>Price (/1M tokens) &lt;= 200K input tokens</th>
+        <th>Price (/1M tokens) &gt; 200K input tokens</th>
+        <th>Price (/1M tokens) &lt;= 200K <strong>cached</strong> input tokens</th>
+        <th>Price (/1M tokens) &gt; 200K <strong>cached</strong> input tokens</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="3">Gemini 3.5 Flash</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>$1.50 (Global)<br><br>$1.65 (Non-global)*</td>
+        <td>$1.50 (Global)<br><br>$1.65 (Non-global)*</td>
+        <td>$0.15 (Global)<br><br>$0.165 (Non-global)*</td>
+        <td>$0.15 (Global)<br><br>$0.165 (Non-global)*</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>$9.00 (Global)<br><br>$9.90 (Non-global)*</td>
+        <td>$9.00 (Global)<br><br>$9.90 (Non-global)*</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td rowspan="3">Gemini 3 Pro Image</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>$2.00</td>
+        <td>$2.00</td>
+        <td>$0.20</td>
+        <td>$0.20</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>$12.00</td>
+        <td>$12.00</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+<section>
+  <h3 id="priority" data-text="Priority" tabindex="-1">Priority</h3>
+  <table class="style0">
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Type</th>
+        <th>Price (/1M tokens) &lt;= 200K input tokens with Priority</th>
+        <th>Price (/1M tokens) &gt; 200K input tokens with Priority</th>
+        <th>Price (/1M tokens) &lt;= 200K <strong>cached</strong> input tokens with Priority</th>
+        <th>Price (/1M tokens) &gt; 200K <strong>cached</strong> input tokens with Priority</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="3">Gemini 3.5 Flash</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>$2.70 (Global)<br><br>$2.97 (Non-global)*</td>
+        <td>$2.70 (Global)<br><br>$2.97 (Non-global)*</td>
+        <td>$0.27 (Global)<br><br>$0.297 (Non-global)*</td>
+        <td>$0.27 (Global)<br><br>$0.297 (Non-global)*</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>$16.20 (Global)<br><br>$17.82 (Non-global)*</td>
+        <td>$16.20 (Global)<br><br>$17.82 (Non-global)*</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td rowspan="3">Gemini 3 Pro Image</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+<section>
+  <h3 id="flexbatch" data-text="Flex/Batch" tabindex="-1">Flex/Batch</h3>
+  <table class="style0">
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Type</th>
+        <th>Price (/1M tokens) &lt;= 200K input tokens with Flex/Batch</th>
+        <th>Price (/1M tokens) &gt; 200K input tokens with Flex/Batch</th>
+        <th>Price (/1M tokens) &lt;= 200K <strong>cached</strong> input tokens with Flex/Batch</th>
+        <th>Price (/1M tokens) &gt; 200K <strong>cached</strong> input tokens with Flex/Batch</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="3">Gemini 3.5 Flash</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>$0.75 (Global)<br><br>$0.825 (Non-global)*</td>
+        <td>$0.75 (Global)<br><br>$0.825 (Non-global)*</td>
+        <td>Batch: $0.075 (Global)<br><br>Flex: $0.08 (Global)<br><br>$0.0825 (Non-global)*</td>
+        <td>Batch: $0.075 (Global)<br><br>Flex: $0.08 (Global)<br><br>$0.0825 (Non-global)*</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>$4.50 (Global)<br><br>$4.95 (Non-global)*</td>
+        <td>$4.50 (Global)<br><br>$4.95 (Non-global)*</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td rowspan="3">Gemini 3 Pro Image</td>
+      </tr>
+      <tr>
+        <td>Input (text, image, video, audio)</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td>Text output (response and reasoning)</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td>N/A</td>
+      </tr>
+    </tbody>
+  </table>
+</section>

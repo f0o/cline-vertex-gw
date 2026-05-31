@@ -2,12 +2,17 @@ package provider
 
 import (
 	"context"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"go.f0o.dev/cline-vertex-gw/logx"
 )
+
+// logPricing is the component-scoped logger for cost-estimation / pricing-table
+// refresh. Records carry component=pricing.
+var logPricing = logx.For("pricing")
 
 // Pricing TTL refresh.
 //
@@ -54,9 +59,14 @@ func pricingTTL() time.Duration {
 	return envDurationSeconds(envPricingCacheTTL, defaultPricingTTL)
 }
 
-// WarmPricing performs a one-shot pricing scrape at startup. Best-effort: any
-// error is logged and swallowed so a billing-API hiccup never aborts boot.
-// No-op when pricing is disabled.
+// WarmPricing primes the pricing/billing table at startup. It lazily refreshes
+// from the on-disk filesystem cache: if a cache file exists and is younger than
+// the configured TTL (default 1 day) the table is loaded from disk and no live
+// scrape is performed; otherwise it scrapes the Cloud Billing catalog live and
+// persists the fresh result to disk for the next startup.
+//
+// Best-effort: any error is logged and swallowed so a billing-API hiccup or a
+// missing cache directory never aborts boot. No-op when pricing is disabled.
 func (vc *VertexClient) WarmPricing(ctx context.Context) {
 	if vc == nil || !PricingEnabled() {
 		return
@@ -64,12 +74,37 @@ func (vc *VertexClient) WarmPricing(ctx context.Context) {
 	pricingRefresh.mu.Lock()
 	defer pricingRefresh.mu.Unlock()
 	pricingRefresh.lastAttempt = time.Now()
+
+	// 1. Try the on-disk cache first. A fresh file means we can skip the live
+	//    scrape entirely and serve cost estimates immediately.
+	var cached map[string]ModelPrice
+	if fresh, err := readFSCache(pricingCacheFile, &cached); err != nil {
+		logPricing.Warn("reading on-disk cache failed; will scrape live", "error", err)
+	} else if fresh && len(cached) > 0 {
+		pricing.setTable(cached)
+		pricingRefresh.lastOK = true
+		logPricing.Info("loaded model rates from on-disk cache", "count", len(cached), "source", "fs-cache-fresh")
+		return
+	}
+
+	// 2. Cache missing or stale: scrape live, then persist the fresh table.
 	if err := vc.RefreshPricing(ctx); err != nil {
-		log.Printf("[pricing] startup warm failed (cost estimates unavailable until next refresh): %v", err)
+		logPricing.Warn("startup warm failed; cost estimates unavailable until next refresh", "error", err)
 		pricingRefresh.lastOK = false
+		// Fall back to a stale on-disk copy if we managed to read one — a
+		// stale estimate is better than none until the next refresh.
+		if len(cached) > 0 {
+			pricing.setTable(cached)
+			logPricing.Warn("serving stale on-disk cache after refresh failure", "count", len(cached))
+		}
 		return
 	}
 	pricingRefresh.lastOK = true
+	if snap := pricing.snapshot(); len(snap) > 0 {
+		if err := writeFSCache(pricingCacheFile, snap); err != nil {
+			logPricing.Error("writing on-disk cache failed", "error", err)
+		}
+	}
 }
 
 // MaybeRefreshPricing triggers a background-safe refresh if the TTL has elapsed
@@ -97,8 +132,9 @@ func (vc *VertexClient) MaybeRefreshPricing(ctx context.Context) {
 		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := vc.RefreshPricing(rctx); err != nil {
-			log.Printf("[pricing] background refresh failed: %v", err)
+			logPricing.Warn("background refresh failed; retaining previous table", "error", err)
 			pricingRefresh.mu.Lock()
+
 			pricingRefresh.lastOK = false
 			pricingRefresh.mu.Unlock()
 			return
@@ -106,5 +142,12 @@ func (vc *VertexClient) MaybeRefreshPricing(ctx context.Context) {
 		pricingRefresh.mu.Lock()
 		pricingRefresh.lastOK = true
 		pricingRefresh.mu.Unlock()
+		// Persist the fresh table so a restart within the TTL window can
+		// load it from disk instead of re-scraping.
+		if snap := pricing.snapshot(); len(snap) > 0 {
+			if err := writeFSCache(pricingCacheFile, snap); err != nil {
+				logPricing.Error("writing on-disk cache failed", "error", err)
+			}
+		}
 	}()
 }

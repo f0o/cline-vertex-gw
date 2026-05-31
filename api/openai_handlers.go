@@ -44,7 +44,7 @@ func (h *APIHandler) OpenAIModelsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if h.Vertex == nil {
-		rl.Logf("aborting: Vertex client not configured")
+		rl.Errorf("aborting: Vertex client not configured")
 		writeOAIError(w, http.StatusInternalServerError, "server_error",
 			"Vertex AI client not configured", "")
 		return
@@ -53,7 +53,7 @@ func (h *APIHandler) OpenAIModelsHandler(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	vertexModels, err := h.Vertex.ListModelsCached(ctx)
 	if err != nil {
-		rl.Logf("error fetching models: %v", err)
+		rl.Errorf("error fetching models: %v", err)
 		writeOAIError(w, http.StatusBadGateway, "upstream_error",
 			fmt.Sprintf("Error fetching models from Vertex AI: %v", err), "")
 		return
@@ -80,7 +80,7 @@ func (h *APIHandler) OpenAIModelsHandler(w http.ResponseWriter, r *http.Request)
 		Object: "list",
 		Data:   out,
 	}); err != nil {
-		rl.Logf("encode response: %v", err)
+		rl.Errorf("encode response: %v", err)
 		return
 	}
 	rl.Logf("served %d models in %v", len(out), rl.Elapsed())
@@ -291,7 +291,7 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	if h.Vertex == nil {
-		rl.Logf("aborting: Vertex client not configured")
+		rl.Errorf("aborting: Vertex client not configured")
 		writeOAIError(w, http.StatusInternalServerError, "server_error",
 			"Vertex AI client not configured", "")
 		return
@@ -306,7 +306,7 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 				"Request body too large", "")
 			return
 		}
-		rl.Logf("read body: %v", err)
+		rl.Errorf("read body: %v", err)
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error",
 			"Error reading request body", "")
 		return
@@ -315,7 +315,7 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 
 	var req OAIChatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		rl.Logf("parse body: %v", err)
+		rl.Errorf("parse body: %v", err)
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("Error parsing JSON body: %v", err), "")
 		return
@@ -342,12 +342,12 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 		// Image-decode failures and per-request image-budget overruns land
 		// here. Return 400 + a clear error envelope so the caller can fix
 		// the request rather than silently dropping image context.
-		rl.Logf("rejected: build contents: %v", bcerr)
+		rl.Errorf("rejected: build contents: %v", bcerr)
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error", bcerr.Error(), "messages")
 		return
 	}
 	if len(contents) == 0 {
-		rl.Logf("rejected: no valid messages")
+		rl.Errorf("rejected: no valid messages")
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error",
 			"No valid (non-system) messages provided", "messages")
 		return
@@ -357,7 +357,7 @@ func (h *APIHandler) OpenAIChatCompletionsHandler(w http.ResponseWriter, r *http
 	// nonsense; some MaaS models will 400 mid-stream after we've already
 	// committed headers. Catching it here gives a clean 400.
 	if capErr := provider.CheckVisionSupport(req.Model, contents); capErr != nil {
-		rl.Logf("rejected: vision capability: %v", capErr)
+		rl.Errorf("rejected: vision capability: %v", capErr)
 		writeOAIError(w, http.StatusBadRequest, "invalid_request_error", capErr.Error(), "model")
 		return
 	}

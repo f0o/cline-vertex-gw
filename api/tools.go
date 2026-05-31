@@ -75,15 +75,37 @@ func oaiToolCallFromGenai(part *genai.Part) OAIToolCall {
 // OpenAI shape) is also accepted via translateOAIFunctionsToGenai and merged
 // into the same return.
 //
+// isSearchTool checks if a tool definition name represents a special search grounding tool,
+// and if so, returns a genai.Tool representation of it.
+func isSearchTool(name string) *genai.Tool {
+	switch strings.ToLower(name) {
+	case "web_search", "google_search", "web-search", "google-search":
+		return &genai.Tool{
+			GoogleSearchRetrieval: &genai.GoogleSearchRetrieval{},
+		}
+	case "enterprise_web_search", "enterprise-web-search":
+		return &genai.Tool{
+			EnterpriseWebSearch: &genai.EnterpriseWebSearch{},
+		}
+	}
+	return nil
+}
+
 // Returns nil if no tool definitions were supplied. Callers should set the
 // resulting slice on GenerationOptions.Tools.
 func translateOAIToolsToGenai(tools []OAIToolDef, functions []OAIToolFunctionDef) []*genai.Tool {
 	var fds []*genai.FunctionDeclaration
+	var searchTools []*genai.Tool
+
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
 			continue // we only support function tools
 		}
 		if t.Function.Name == "" {
+			continue
+		}
+		if st := isSearchTool(t.Function.Name); st != nil {
+			searchTools = append(searchTools, st)
 			continue
 		}
 		fds = append(fds, oaiToolFunctionDefToGenai(t.Function))
@@ -92,12 +114,23 @@ func translateOAIToolsToGenai(tools []OAIToolDef, functions []OAIToolFunctionDef
 		if f.Name == "" {
 			continue
 		}
+		if st := isSearchTool(f.Name); st != nil {
+			searchTools = append(searchTools, st)
+			continue
+		}
 		fds = append(fds, oaiToolFunctionDefToGenai(f))
 	}
-	if len(fds) == 0 {
+
+	var genaiTools []*genai.Tool
+	if len(fds) > 0 {
+		genaiTools = append(genaiTools, &genai.Tool{FunctionDeclarations: fds})
+	}
+	genaiTools = append(genaiTools, searchTools...)
+
+	if len(genaiTools) == 0 {
 		return nil
 	}
-	return []*genai.Tool{{FunctionDeclarations: fds}}
+	return genaiTools
 }
 
 // oaiToolFunctionDefToGenai converts one OAI function definition into a
@@ -146,11 +179,17 @@ func translateOAIToolChoiceToGenai(c *OAIToolChoice) *genai.ToolConfig {
 // Ollama wire shape (which is structurally identical to OpenAI's `tools`).
 func translateOllamaToolsToGenai(tools []ToolDef) []*genai.Tool {
 	var fds []*genai.FunctionDeclaration
+	var searchTools []*genai.Tool
+
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
 			continue
 		}
 		if t.Function.Name == "" {
+			continue
+		}
+		if st := isSearchTool(t.Function.Name); st != nil {
+			searchTools = append(searchTools, st)
 			continue
 		}
 		fd := &genai.FunctionDeclaration{
@@ -162,10 +201,17 @@ func translateOllamaToolsToGenai(tools []ToolDef) []*genai.Tool {
 		}
 		fds = append(fds, fd)
 	}
-	if len(fds) == 0 {
+
+	var genaiTools []*genai.Tool
+	if len(fds) > 0 {
+		genaiTools = append(genaiTools, &genai.Tool{FunctionDeclarations: fds})
+	}
+	genaiTools = append(genaiTools, searchTools...)
+
+	if len(genaiTools) == 0 {
 		return nil
 	}
-	return []*genai.Tool{{FunctionDeclarations: fds}}
+	return genaiTools
 }
 
 // oaiToolCallToGenaiPart converts an inbound OAI assistant-replay tool_call

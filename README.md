@@ -383,6 +383,8 @@ All configuration is via environment variables.
 | `GW_PRICING` | `on` | Cost estimation toggle. When on, the gateway scrapes per-token prices live from the GCP **Cloud Billing Catalog API** and prints a per-request USD breakdown alongside the request stats (and feeds the `cline_vertex_gw_estimated_cost_usd_total` metric). Set to `off`/`false`/`0` to disable all pricing scrapes and cost output. |
 | `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Refresh interval for the live pricing table. Prices change on the order of months, so the catalog is scraped at most once per interval (warmed once at startup, then refreshed lazily in the background on request completion). |
 | `GW_PRICING_DEBUG` | `off` | When on, the pricing scrape logs a verbose diagnostic dump (`[pricing][debug]`): the matched/not-matched billing services, a per-SKU resolution trace, and the final per-model resolved rate table. Use it to verify or troubleshoot the SKU→model/rate mapping against your project's catalog. |
+| `GW_GEMINI_SEARCH_GROUNDING` | _empty_ | Enable native Vertex Google Search Grounding / WebSearch for Gemini models. Set to `google_search` (standard Google Search) or `enterprise_web_search` (requires a Vertex AI Search data store setup) to enable globally. Also triggered dynamically per-request if the client passes a tool/function named `web_search` or `google_search`. |
+| `GW_GEMINI_SEARCH_THRESHOLD` | `-1.0` (disabled) | Optional dynamic search triggering threshold (float, e.g. `0.5`). Lower values trigger search more conservatively when the model lacks confidence; `-1.0` uses Google's default. Only evaluated when Google Search Grounding is active. |
 
 
 
@@ -432,7 +434,7 @@ operator-actionable metrics:
 | `cline_vertex_gw_tags_cache_hits_total` / `_misses_total` | counters | — | Hit ratio for the `/api/tags` cache. Should approach 1.0 in steady state. |
 | `cline_vertex_gw_panics_recovered_total` | counter | — | Any non-zero value indicates a bug — file an issue. |
 | `cline_vertex_gw_compression_bytes_saved_total` | counter | `stage` | Cumulative bytes removed by each compression pipeline stage. |
-| `cline_vertex_gw_estimated_cost_usd_total` | counter | `kind`, `model` | Cumulative **estimated** USD spend by `kind={input,cached,output}` and `model`. Prices are scraped live from the GCP Cloud Billing Catalog API. `sum(rate(cline_vertex_gw_estimated_cost_usd_total[1h]))` gives your hourly burn; `by (model)` shows which model dominates spend. Disabled when `GW_PRICING=off`. |
+| `cline_vertex_gw_estimated_cost_usd_total` | counter | `kind`, `model`, `tier` | Cumulative **estimated** USD spend by `kind={input,cached,output}`, `model` ID, and API routing `tier={standard,priority,flex}`. Prices are scraped live from the GCP Cloud Billing Catalog API. `sum(rate(cline_vertex_gw_estimated_cost_usd_total[1h]))` gives your hourly burn; `by (model, tier)` shows which model/tier dominates spend. Disabled when `GW_PRICING=off`. |
 
 ### Cost estimation
 
@@ -472,6 +474,21 @@ Notes & caveats:
   be able to read the public catalog. A 403/404 just disables cost output
   (logged once); it never blocks a chat request.
 - Set `GW_PRICING=off` to disable the scrape and all cost output entirely.
+
+### Dynamic routing and pricing tiers
+
+The gateway allows clients (like Cline, LiteLLM, or custom SDKs) to dynamically configure the Vertex AI routing/pricing tier per request by sending an HTTP header. If the header is missing, the gateway defaults to the `"standard"` tier.
+
+The gateway inspects the incoming request for the following headers (in order of precedence):
+1. `X-Routing-Tier`
+2. `X-Vertex-AI-Routing-Tier`
+
+The value is parsed case-insensitively and normalized:
+* `Standard`, `standard`, or empty/unknown/invalid -> `"standard"` (Standard routing tier)
+* `Priority`, `priority` -> `"priority"` (Priority routing tier for lower latency/higher quotas)
+* `Flex`, `flex`, `Batch`, `batch`, `flex/batch` -> `"flex"` (Flex/Batch routing tier for lower cost)
+
+The gateway propagates the normalized value as the outbound `X-Vertex-AI-Routing-Tier` header on all calls made to Google's endpoints (applying to the official GenAI SDK as well as internal REST clients used for non-Google models).
 
 ### Token-cost optimization
 
@@ -581,6 +598,110 @@ export GW_MAX_INPUT_CHARS=700000           # ≈ 200k tokens; tune to your model
 export GW_NORMALIZE_WHITESPACE=off
 export GW_COLLAPSE_ENV_BLOCKS=off
 export GW_DEDUP_REPLAY=off
+```
+
+### Optimization Presets & Profiles
+
+The gateway’s optimization pipeline can be configured to match your specific balance of cost, speed, and reasoning capability. Here are **5 progressive presets** ranging from a pure, unoptimized pass-through to maximum context squeeze. 
+
+The **Default Profile (Profile 3)** sits right in the middle of the spectrum and requires no environment variables to be set.
+
+#### Summary Matrix
+
+| Preset / Profile | Loop Traps & Nudge | Env Block Collapse | Tool Truncation | Replay Dedup | Stale Tool Pruning | Substring Dedup | Context Trim |
+|---|---|---|---|---|---|---|---|
+| **1. Pass-Through (Raw)** | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled |
+| **2. Gentle/Conservative** | Active (No Nudge) | $\ge$ 1024 B | Disabled | $\ge$ 1024 B | Disabled | Disabled | Disabled |
+| **3. Balanced (DEFAULT)** | Active + Nudge | $\ge$ 256 B | Active (8k limit) | $\ge$ 512 B | Disabled | Disabled | Disabled |
+| **4. Aggressive** | Active + Nudge | $\ge$ 128 B | Active (4k limit) | $\ge$ 256 B | Enabled | Active ($\ge$ 512 B) | Soft limit |
+| **5. Extreme Squeeze** | Active + Nudge | $\ge$ 64 B | Active (2k limit) | $\ge$ 128 B | Enabled | Active ($\ge$ 256 B) | Strict limit + Hard Output Caps |
+
+---
+
+#### 1. Pass-Through (Raw History)
+**Ideal for:** Zero modification of conversation structure. Full, raw history is passed directly to Vertex. This disables all compressors, but loses all cost-saving benefits.
+```bash
+export GW_BREAK_LOOP_TRAP=off
+export GW_COLLAPSE_ENV_BLOCKS=off
+export GW_TOOL_RESULT_TRUNCATE=off
+export GW_DEDUP_REPLAY=off
+export GW_PRUNE_STALE_TOOLS=off
+export GW_DEDUP_SUBSTRING=off
+export GW_MAX_INPUT_CHARS=0
+```
+
+#### 2. Gentle / Conservative Optimization
+**Ideal for:** Users who want very light optimization. It collapses stale environment blocks and removes exact duplicates only if they are very large ($\ge$ 1 KB), leaving tools and responses untouched.
+```bash
+export GW_BREAK_LOOP_TRAP=on
+export GW_LOOP_TRAP_NUDGE=off
+export GW_COLLAPSE_ENV_BLOCKS=on
+export GW_COLLAPSE_ENV_MIN_BYTES=1024
+export GW_TOOL_RESULT_TRUNCATE=off
+export GW_DEDUP_REPLAY=on
+export GW_DEDUP_MIN_BYTES=1024
+export GW_PRUNE_STALE_TOOLS=off
+export GW_DEDUP_SUBSTRING=off
+export GW_MAX_INPUT_CHARS=0
+```
+
+#### 3. Balanced / Standard Optimization (DEFAULT)
+**Ideal for:** The default experience. No environment variables are required. It delivers high savings (~64% reduction) with zero impact on reasoning quality by middle-eliding stale tool outputs, collapsing redundant environmental blocks, and deduplicating exact matches.
+```bash
+# Sits in the middle. Default behavior if no variables are configured:
+# GW_BREAK_LOOP_TRAP=on
+# GW_LOOP_TRAP_NUDGE=on
+# GW_COLLAPSE_ENV_BLOCKS=on
+# GW_COLLAPSE_ENV_MIN_BYTES=256
+# GW_TOOL_RESULT_TRUNCATE=on
+# GW_TOOL_RESULT_MAX_BYTES=8000
+# GW_TOOL_RESULT_HEAD_BYTES=2000
+# GW_TOOL_RESULT_TAIL_BYTES=1000
+# GW_DEDUP_REPLAY=on
+# GW_DEDUP_MIN_BYTES=512
+# GW_PRUNE_STALE_TOOLS=off
+# GW_DEDUP_SUBSTRING=off
+# GW_MAX_INPUT_CHARS=0
+```
+
+#### 4. Aggressive Optimization (High-Savings)
+**Ideal for:** Long-running agentic tasks where context size grows quickly. This preset enables stale tool pruning (removing redundant read-only calls/responses) and substring deduplication (compressing partial replayed blocks), as well as setting a soft context limit of 350K characters (~100k tokens).
+```bash
+export GW_BREAK_LOOP_TRAP=on
+export GW_LOOP_TRAP_NUDGE=on
+export GW_COLLAPSE_ENV_BLOCKS=on
+export GW_COLLAPSE_ENV_MIN_BYTES=128
+export GW_TOOL_RESULT_TRUNCATE=on
+export GW_TOOL_RESULT_MAX_BYTES=4000
+export GW_TOOL_RESULT_HEAD_BYTES=1000
+export GW_TOOL_RESULT_TAIL_BYTES=500
+export GW_DEDUP_REPLAY=on
+export GW_DEDUP_MIN_BYTES=256
+export GW_PRUNE_STALE_TOOLS=on
+export GW_DEDUP_SUBSTRING=on
+export GW_DEDUP_SUBSTRING_MIN_BYTES=512
+export GW_MAX_INPUT_CHARS=350000           # ≈ 100k tokens input context limit
+```
+
+#### 5. Extreme Squeeze (Max Compression & Caps)
+**Ideal for:** Low-cost, fast response times, or models with very small context windows. This preset applies strict output caps, trims inputs heavily to 175K characters (~50k tokens), aggressively middle-elides tool outputs, and squeezes every duplicate block down to its absolute limit.
+```bash
+export GW_BREAK_LOOP_TRAP=on
+export GW_LOOP_TRAP_NUDGE=on
+export GW_COLLAPSE_ENV_BLOCKS=on
+export GW_COLLAPSE_ENV_MIN_BYTES=64
+export GW_TOOL_RESULT_TRUNCATE=on
+export GW_TOOL_RESULT_MAX_BYTES=2000
+export GW_TOOL_RESULT_HEAD_BYTES=500
+export GW_TOOL_RESULT_TAIL_BYTES=250
+export GW_DEDUP_REPLAY=on
+export GW_DEDUP_MIN_BYTES=128
+export GW_PRUNE_STALE_TOOLS=on
+export GW_DEDUP_SUBSTRING=on
+export GW_DEDUP_SUBSTRING_MIN_BYTES=256
+export GW_MAX_INPUT_CHARS=175000           # ≈ 50k tokens input context limit
+export GW_DEFAULT_MAX_OUTPUT_TOKENS=2048    # limit default blank response cost
+export GW_MAX_OUTPUT_TOKENS_HARD=4096       # enforce strict response ceiling
 ```
 
 ---

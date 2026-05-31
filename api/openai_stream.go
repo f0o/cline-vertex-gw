@@ -36,7 +36,7 @@ func (h *APIHandler) openaiChatNonStream(
 	resp, metrics, err := h.runNonStreamWithRetry(
 		ctx, rl, req.Model, systemPrompt, contents, genOpts)
 	if err != nil {
-		rl.Logf("non-stream failed class=%s err=%v", classifyError(err), err)
+		rl.Errorf("non-stream failed class=%s err=%v", classifyError(err), err)
 		status, errType := httpStatusForUpstreamError(err)
 		writeOAIError(w, status, errType,
 			fmt.Sprintf("Error generating content: %v", err), "")
@@ -91,9 +91,9 @@ func (h *APIHandler) openaiChatNonStream(
 	w.Header().Set("Content-Type", "application/json")
 	provider.DebugLogPayload(ctx, "outbound_response", out)
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		rl.Logf("encode response: %v", err)
+		rl.Errorf("encode response: %v", err)
 	}
-	logCompletionForModel(rl, "v1-chat", req.Model, metrics)
+	logCompletionForModel(ctx, rl, "v1-chat", req.Model, metrics)
 }
 
 // openaiChatStream handles the streaming branch of /v1/chat/completions.
@@ -134,7 +134,7 @@ func (h *APIHandler) openaiChatStream(
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		rl.Logf("streaming unsupported by responseWriter")
+		rl.Errorf("streaming unsupported by responseWriter")
 		writeOAIError(w, http.StatusInternalServerError, "server_error",
 			"Streaming unsupported", "")
 		return
@@ -280,7 +280,7 @@ func (h *APIHandler) openaiChatStream(
 	metrics, err := h.runStreamWithRetry(ctx, rl, req.Model, systemPrompt, contents, genOpts, onDelta)
 
 	if err != nil {
-		rl.Logf("stream failed class=%s err=%v", classifyError(err), err)
+		rl.Errorf("stream failed class=%s err=%v", classifyError(err), err)
 		if !emittedAny {
 			// Headers are already sent (SSE-shaped). Emit the error as an
 			// SSE event with the OpenAI error envelope, then close the stream.
@@ -312,7 +312,7 @@ func (h *APIHandler) openaiChatStream(
 		leftover := unescaper.Flush()
 		if leftover != "" {
 			if err := emitTextDelta(leftover); err != nil {
-				rl.Logf("emit leftover: %v", err)
+				rl.Errorf("emit leftover: %v", err)
 			}
 		}
 	}
@@ -320,7 +320,7 @@ func (h *APIHandler) openaiChatStream(
 	// Ensure clients always see at least one event even for empty completions.
 	if !emittedAny {
 		if err := emitFirstDelta(); err != nil {
-			rl.Logf("emit first delta: %v", err)
+			rl.Errorf("emit first delta: %v", err)
 			return
 		}
 	}
@@ -349,12 +349,12 @@ func (h *APIHandler) openaiChatStream(
 		},
 	}
 	if err := writeSSEData(ctx, w, finalChunk); err != nil {
-		rl.Logf("encode final chunk: %v", err)
+		rl.Errorf("encode final chunk: %v", err)
 	}
 	// Terminator sentinel.
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
-	logCompletionForModel(rl, "v1-chat-stream", req.Model, metrics)
+	logCompletionForModel(ctx, rl, "v1-chat-stream", req.Model, metrics)
 }
 
 // writeSSEData JSON-encodes v and writes it as a single SSE `data: ...` event.

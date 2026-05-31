@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"io"
 	"iter"
-	"log"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -18,19 +18,31 @@ import (
 	"google.golang.org/genai"
 )
 
+// logVertexTags scopes model-discovery fan-out logs to component=tags.
+var logVertexTags = logx.Scoped("tags")
+
 type ContextKey string
 
 const (
-	ContextKeyReqID ContextKey = "req_id"
-	ContextKeyRoute ContextKey = "route"
+	ContextKeyReqID       ContextKey = "req_id"
+	ContextKeyRoute       ContextKey = "route"
+	ContextKeyRoutingTier ContextKey = "routing_tier"
 )
 
 // cloudPlatformScope is the OAuth2 scope required for all Vertex AI / Cloud
 // Billing REST calls made by this package.
 const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
+// dumpPayloads dictates whether DebugLogPayload actually emits payloads to logs.
+// Defaults to false to avoid bloating logs even when LOG_LEVEL=debug.
+var dumpPayloads = envBool("GW_DUMP_PAYLOADS", false)
+
 // DebugLogPayload serializes the payload as JSON and logs it using slog.DebugContext.
 func DebugLogPayload(ctx context.Context, step string, payload any) {
+	if !dumpPayloads {
+		return
+	}
+
 	reqID, _ := ctx.Value(ContextKeyReqID).(string)
 	route, _ := ctx.Value(ContextKeyRoute).(string)
 
@@ -60,10 +72,17 @@ type VertexClient struct {
 }
 
 func NewVertexClient(ctx context.Context, projectID, location string) (*VertexClient, error) {
+	sdkHTTPClient, err := google.DefaultClient(ctx, cloudPlatformScope)
+	if err != nil {
+		return nil, fmt.Errorf("error creating authenticated sdk http client: %w", err)
+	}
+	sdkHTTPClient.Transport = &routingTierRoundTripper{underlying: sdkHTTPClient.Transport}
+
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Backend:  genai.BackendVertexAI,
-		Project:  projectID,
-		Location: location,
+		Backend:    genai.BackendVertexAI,
+		Project:    projectID,
+		Location:   location,
+		HTTPClient: sdkHTTPClient,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error creating Vertex AI client: %w", err)
@@ -73,6 +92,7 @@ func NewVertexClient(ctx context.Context, projectID, location string) (*VertexCl
 	if err != nil {
 		return nil, fmt.Errorf("error creating authenticated http client: %w", err)
 	}
+	httpClient.Transport = &routingTierRoundTripper{underlying: httpClient.Transport}
 
 	// Apply a sane timeout so a hung discovery call can't stall /api/tags.
 	httpClient.Timeout = 15 * time.Second
@@ -84,6 +104,7 @@ func NewVertexClient(ctx context.Context, projectID, location string) (*VertexCl
 	if err != nil {
 		return nil, fmt.Errorf("error creating authenticated streaming http client: %w", err)
 	}
+	streamHTTP.Transport = &routingTierRoundTripper{underlying: streamHTTP.Transport}
 
 	return &VertexClient{
 		client:     client,
@@ -92,6 +113,22 @@ func NewVertexClient(ctx context.Context, projectID, location string) (*VertexCl
 		httpClient: httpClient,
 		streamHTTP: streamHTTP,
 	}, nil
+}
+
+type routingTierRoundTripper struct {
+	underlying http.RoundTripper
+}
+
+func (rt *routingTierRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	if tier, ok := req.Context().Value(ContextKeyRoutingTier).(string); ok && tier != "" {
+		cloned.Header.Set("X-Vertex-AI-Routing-Tier", tier)
+	}
+	underlying := rt.underlying
+	if underlying == nil {
+		underlying = http.DefaultTransport
+	}
+	return underlying.RoundTrip(cloned)
 }
 
 func (vc *VertexClient) Close() {
@@ -162,13 +199,49 @@ func (vc *VertexClient) GetConfig(systemPrompt string, opts *GenerationOptions) 
 		// native shape natively. Other publishers receive Tools/ToolConfig
 		// directly from opts inside their per-adapter Build* helpers.
 		if len(opts.Tools) > 0 {
-			config.Tools = opts.Tools
+			config.Tools = make([]*genai.Tool, len(opts.Tools))
+			copy(config.Tools, opts.Tools)
 		}
 		if opts.ToolConfig != nil {
 			config.ToolConfig = opts.ToolConfig
 		}
 	}
+
+	// Inject configured search grounding tool if present
+	if searchTool := vc.getSearchGroundingTool(); searchTool != nil {
+		config.Tools = append(config.Tools, searchTool)
+	}
+
 	return &config
+}
+
+// getSearchGroundingTool returns a genai.Tool populated with the configured search grounding type
+// (e.g. GoogleSearchRetrieval or EnterpriseWebSearch) governed by GW_GEMINI_SEARCH_GROUNDING.
+func (vc *VertexClient) getSearchGroundingTool() *genai.Tool {
+	grounding := envString("GW_GEMINI_SEARCH_GROUNDING", "")
+	if grounding == "" {
+		return nil
+	}
+
+	switch strings.ToLower(grounding) {
+	case "google_search", "google-search", "google_search_retrieval", "google-search-retrieval":
+		t := &genai.Tool{
+			GoogleSearchRetrieval: &genai.GoogleSearchRetrieval{},
+		}
+		thresholdVal := envFloat32("GW_GEMINI_SEARCH_THRESHOLD", -1.0)
+		if thresholdVal >= 0 {
+			t.GoogleSearchRetrieval.DynamicRetrievalConfig = &genai.DynamicRetrievalConfig{
+				DynamicThreshold: &thresholdVal,
+				Mode:             "MODE_DYNAMIC",
+			}
+		}
+		return t
+	case "enterprise_web_search", "enterprise-web-search":
+		return &genai.Tool{
+			EnterpriseWebSearch: &genai.EnterpriseWebSearch{},
+		}
+	}
+	return nil
 }
 
 // FormatModelName ensures the model name has the correct publisher prefix for
@@ -217,8 +290,20 @@ var publisherRegistry = map[string]publisherInfo{
 	"deepseek-ai": {kind: adapterOpenAICompat, discoverable: true}, // DeepSeek
 	"qwen":        {kind: adapterOpenAICompat, discoverable: true}, // Qwen
 	"nvidia":      {kind: adapterOpenAICompat, discoverable: true}, // Nvidia-hosted MaaS models
-	// moonshotai is recognized as a prefix but has no adapter / discovery yet.
-	"moonshotai": {kind: adapterOpenAICompat, discoverable: false},
+	"moonshotai":  {kind: adapterOpenAICompat, discoverable: true}, // Moonshot
+	"xai":         {kind: adapterOpenAICompat, discoverable: true}, // xAI (Grok)
+	"minimax":     {kind: adapterOpenAICompat, discoverable: true}, // MiniMax
+	"zhipuai":     {kind: adapterOpenAICompat, discoverable: true}, // GLM / Zhipu AI
+	"openai":      {kind: adapterOpenAICompat, discoverable: true}, // OpenAI models on Vertex
+}
+
+// publisherAliases maps user-facing or common publisher names to their
+// canonical Vertex AI Model Garden namespaces.
+var publisherAliases = map[string]string{
+	"glm":      "zhipuai",
+	"zhipu":    "zhipuai",
+	"deepseek": "deepseek-ai",
+	"moonshot": "moonshotai",
 }
 
 // publisherSubstringHints maps a case-insensitive substring of a bare model id
@@ -237,6 +322,14 @@ var publisherSubstringHints = []struct {
 	{"command", "cohere"},
 	{"deepseek", "deepseek-ai"},
 	{"qwen", "qwen"},
+	{"grok", "xai"},
+	{"minimax", "minimax"},
+	{"abab", "minimax"},
+	{"moonshot", "moonshotai"},
+	{"kimi", "moonshotai"},
+	{"glm", "zhipuai"},
+	{"zhipu", "zhipuai"},
+	{"gpt", "openai"},
 }
 
 // ParsePublisher splits a model identifier into its publisher namespace and
@@ -259,8 +352,12 @@ func ParsePublisher(model string) (publisher, modelID string) {
 	// "anthropic/claude-opus-4-7" style: a known publisher prefix before the
 	// first slash (and no dot, which would indicate a versioned bare id).
 	if idx := strings.Index(model, "/"); idx > 0 && !strings.Contains(model[:idx], ".") {
-		if head := model[:idx]; isKnownPublisher(head) {
+		head := model[:idx]
+		if isKnownPublisher(head) {
 			return head, model[idx+1:]
+		}
+		if canonical, ok := publisherAliases[strings.ToLower(head)]; ok {
+			return canonical, model[idx+1:]
 		}
 	}
 
@@ -437,7 +534,7 @@ func (vc *VertexClient) ListModels(ctx context.Context) ([]*genai.Model, error) 
 	var combined []*genai.Model
 	for r := range results {
 		if r.err != nil {
-			log.Printf("[tags] publisher=%s: discovery failed: %v", r.publisher, r.err)
+			logVertexTags.Warnf("publisher=%s: discovery failed: %v", r.publisher, r.err)
 			continue
 		}
 		added := 0
@@ -453,14 +550,14 @@ func (vc *VertexClient) ListModels(ctx context.Context) ([]*genai.Model, error) 
 			seen[baseName] = true
 			added++
 		}
-		log.Printf("[tags] publisher=%s source=%s discovered=%d added=%d",
+		logVertexTags.Infof("publisher=%s source=%s discovered=%d added=%d",
 			r.publisher, r.source, len(r.models), added)
 	}
 
 	// Also pull in deployed/tuned models accessible to the project.
 	deployed, derr := vc.listDeployedModels(ctx)
 	if derr != nil {
-		log.Printf("[tags] deployed models lookup failed: %v", derr)
+		logVertexTags.Warnf("deployed models lookup failed: %v", derr)
 	}
 	deployedAdded := 0
 	for _, m := range deployed {
@@ -476,7 +573,7 @@ func (vc *VertexClient) ListModels(ctx context.Context) ([]*genai.Model, error) 
 		deployedAdded++
 	}
 	if len(deployed) > 0 || derr == nil {
-		log.Printf("[tags] deployed discovered=%d added=%d", len(deployed), deployedAdded)
+		logVertexTags.Infof("deployed discovered=%d added=%d", len(deployed), deployedAdded)
 	}
 
 	// Stable ordering makes the /api/tags output deterministic across calls.
@@ -484,7 +581,7 @@ func (vc *VertexClient) ListModels(ctx context.Context) ([]*genai.Model, error) 
 		return combined[i].Name < combined[j].Name
 	})
 
-	log.Printf("[tags] total models=%d publishers=%d elapsed=%v",
+	logVertexTags.Infof("total models=%d publishers=%d elapsed=%v",
 		len(combined), len(supportedPublishers), time.Since(start))
 	return combined, nil
 }
@@ -499,13 +596,13 @@ func (vc *VertexClient) fetchPublisherModels(ctx context.Context, publisher stri
 		models, err := vc.getModelsFromEndpoint(ctx, ep.url)
 		if err != nil {
 			lastErr = err
-			log.Printf("[tags] publisher=%s endpoint=%s error: %v", publisher, ep.label, err)
+			logVertexTags.Warnf("publisher=%s endpoint=%s error: %v", publisher, ep.label, err)
 			continue
 		}
 		if len(models) > 0 {
 			return models, ep.label, nil
 		}
-		log.Printf("[tags] publisher=%s endpoint=%s returned 0 models", publisher, ep.label)
+		logVertexTags.Warnf("publisher=%s endpoint=%s returned 0 models", publisher, ep.label)
 	}
 	// If nothing failed but nothing returned either, that's still a success
 	// (just no models exposed for this publisher in this account/region).

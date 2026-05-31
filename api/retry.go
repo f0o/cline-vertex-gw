@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.f0o.dev/cline-vertex-gw/logx"
 )
 
 // retryConfig controls the exponential backoff retry behavior used by the
@@ -128,19 +130,49 @@ func newReqID() string {
 	)
 }
 
-// reqLogger writes log lines tagged with a stable request ID and route.
+// reqLogger emits per-request log records as a structured event stream. The
+// stable request ID and route ride along as slog attributes (req=<id>,
+// route=<name>) on every line — not baked into the message text — so an
+// aggregator can group an entire request's lifecycle by req and filter by
+// route. Each helper carries the correct LEVEL for its semantics.
 type reqLogger struct {
 	id    string
 	route string
 	start time.Time
+	l     *slog.Logger
 }
 
 func newReqLogger(route string) *reqLogger {
-	return &reqLogger{id: newReqID(), route: route, start: time.Now()}
+	id := newReqID()
+	return &reqLogger{
+		id:    id,
+		route: route,
+		start: time.Now(),
+		l:     logx.For("request").With(slog.String("req", id), slog.String("route", route)),
+	}
 }
 
+// L returns the request-scoped structured logger (req + route attributes
+// already attached) for call sites that want to log explicit key/value pairs.
+func (rl *reqLogger) L() *slog.Logger { return rl.l }
+
+// Logf logs request progress at INFO. Use for normal lifecycle/progress lines
+// (request accepted, served N models, first chunk, retry succeeded).
 func (rl *reqLogger) Logf(format string, args ...any) {
-	log.Printf("[%s req=%s] "+format, append([]any{rl.route, rl.id}, args...)...)
+	rl.l.Info(fmt.Sprintf(format, args...))
+}
+
+// Warnf logs a recoverable problem at WARN — the request continued or was
+// retried (a retry attempt, a partial-output abort that may still recover).
+func (rl *reqLogger) Warnf(format string, args ...any) {
+	rl.l.Warn(fmt.Sprintf(format, args...))
+}
+
+// Errorf logs a request-fatal problem at ERROR — the request could not be
+// served (client not configured, body too large, parse failure, non-retryable
+// upstream error, encode failure).
+func (rl *reqLogger) Errorf(format string, args ...any) {
+	rl.l.Error(fmt.Sprintf(format, args...))
 }
 
 func (rl *reqLogger) Elapsed() time.Duration {

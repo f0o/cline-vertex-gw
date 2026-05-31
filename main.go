@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.f0o.dev/cline-vertex-gw/api"
+	"go.f0o.dev/cline-vertex-gw/logx"
 	"go.f0o.dev/cline-vertex-gw/provider"
 )
 
@@ -45,12 +46,16 @@ const (
 )
 
 // configureLogging installs a slog handler as the program-wide default and
-// also reroutes the legacy `log` package through it. This means every
-// existing log.Printf call in the codebase (~25 sites) emits structured
-// JSON automatically — no per-call-site changes needed.
+// also reroutes the legacy `log` package through it via a severity-aware
+// bridge. Application code logs through the leveled logx helpers (which carry
+// the correct level + structured attributes); the bridge is a safety net so
+// stdlib/third-party `log` output still respects LOG_LEVEL.
 //
-// LOG_FORMAT=text falls back to the human-readable text handler for local
-// development; default is JSON for production / aggregator-friendly use.
+// LOG_LEVEL selects the minimum level emitted ("debug"|"info"|"warn"|"error",
+// default "info"). LOG_FORMAT=text falls back to the human-readable text
+// handler for local development; default is JSON for production /
+// aggregator-friendly use (one structured record per event).
+
 func configureLogging() {
 	level := slog.LevelInfo
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(envLogLevel))) {
@@ -72,21 +77,54 @@ func configureLogging() {
 	}
 	logger := slog.New(h)
 	slog.SetDefault(logger)
-	// Bridge stdlib log → slog so existing log.Printf calls become structured.
-	// They land at INFO with msg=<formatted line>. Caller info is stripped
-	// (the original log call site isn't worth the extra runtime cost).
+	// Bridge stdlib log → slog so any un-migrated / third-party log.Printf
+	// output still becomes structured and severity-classified (see slogBridge).
 	log.SetFlags(0)
+
 	log.SetOutput(&slogBridge{logger: logger})
 }
 
-// slogBridge wraps a slog.Logger as an io.Writer so log.Printf output flows
-// through the structured handler. Each Write becomes one INFO record.
+// slogBridge wraps a slog.Logger as an io.Writer so any *un-migrated*
+// log.Printf output still flows through the structured handler. Most call sites
+// have been moved to the leveled logx helpers; this bridge remains as a safety
+// net for the stdlib `log` package and third-party libraries that log through
+// it.
+//
+// Crucially, the bridge is severity-aware: instead of forcing every line to
+// INFO (which made LOG_LEVEL useless), it infers the level from conventional
+// markers in the message text. This guarantees that even legacy/third-party
+// lines respect LOG_LEVEL filtering. Migrated call sites set the level
+// explicitly via logx and never rely on this inference.
 type slogBridge struct{ logger *slog.Logger }
 
 func (b *slogBridge) Write(p []byte) (int, error) {
 	msg := strings.TrimRight(string(p), "\n")
-	b.logger.Info(msg)
+	b.logger.Log(context.Background(), inferLevel(msg), msg)
 	return len(p), nil
+}
+
+// inferLevel maps a freeform log line to a slog level using common severity
+// markers. It is intentionally conservative: anything unrecognized stays at
+// INFO so we never accidentally hide a normal lifecycle line. Order matters —
+// more severe markers are checked first.
+func inferLevel(msg string) slog.Level {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "[debug]"):
+		return slog.LevelDebug
+	case strings.Contains(msg, "SECURITY WARNING:"),
+		strings.Contains(msg, "WARNING:"),
+		strings.Contains(lower, "invalid "),
+		strings.Contains(lower, "using stale"),
+		strings.Contains(lower, "using default"):
+		return slog.LevelWarn
+	case strings.Contains(lower, "panic"),
+		strings.Contains(lower, "failed"),
+		strings.Contains(lower, "error:"):
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func mustEnvInt(name string, def int) int {
@@ -96,10 +134,12 @@ func mustEnvInt(name string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
-		log.Printf("invalid %s=%q; using default %d", name, v, def)
+		logx.Warn("invalid env value; using default",
+			"env", name, "value", v, "default", def)
 		return def
 	}
 	return n
+
 }
 
 // isLoopback reports whether the bind address restricts the listener to the
@@ -131,23 +171,21 @@ func main() {
 	location := os.Getenv(envLocation)
 
 	if projectID == "" || location == "" {
-		log.Printf("WARNING: %s or %s not set; Vertex AI calls will fail until configured.",
-			envProject, envLocation)
+		logx.Warn("Vertex AI project/location not set; upstream calls will fail until configured",
+			"project_env", envProject, "location_env", envLocation)
 	}
 
 	authToken := strings.TrimSpace(os.Getenv(envAuthToken))
 	if authToken == "" {
-		log.Printf("SECURITY WARNING: %s is not set; the gateway is running UNAUTHENTICATED. "+
-			"Set %s to require `Authorization: Bearer <token>` on all /api/* and /v1/* requests.",
-			envAuthToken, envAuthToken)
+		logx.Warn("gateway running UNAUTHENTICATED; set the auth token to require Bearer auth on /api/* and /v1/*",
+			"auth_env", envAuthToken)
 	}
 	// Loud warning if the operator opted to bind non-loopback without auth —
-	// this is the single most dangerous misconfiguration possible.
+	// this is the single most dangerous misconfiguration possible, so it is an
+	// ERROR (still non-fatal: the operator may front this with a proxy).
 	if authToken == "" && !isLoopback(bind) {
-		log.Printf("SECURITY WARNING: bound to %q WITHOUT %s set — anyone reachable on "+
-			"that interface can spend your Vertex AI quota. Either set %s or "+
-			"unset/set %s=127.0.0.1 to restrict to loopback.",
-			bind, envAuthToken, envAuthToken, envBind)
+		logx.Error("SECURITY: bound to a non-loopback address WITHOUT auth — anyone reachable can spend your Vertex AI quota",
+			"bind", bind, "auth_env", envAuthToken, "bind_env", envBind)
 	}
 
 	maxBodyMB := mustEnvInt(envMaxBodyMB, 16)
@@ -168,8 +206,9 @@ func main() {
 	if projectID != "" && location != "" {
 		vc, err := provider.NewVertexClient(rootCtx, projectID, location)
 		if err != nil {
-			log.Fatalf("Failed to initialize Vertex AI client: %v", err)
+			logx.Fatal("failed to initialize Vertex AI client", "error", err)
 		}
+
 		vertexClient = vc
 		defer vertexClient.Close()
 
@@ -181,6 +220,14 @@ func main() {
 		if provider.PricingEnabled() {
 			go vertexClient.WarmPricing(rootCtx)
 		}
+
+		// Warm the model catalog from the on-disk filesystem cache (lazy
+		// refresh: loads from disk when fresh, otherwise runs the live
+		// multi-publisher discovery and rewrites the cache). Runs in a
+		// goroutine — best-effort, never blocks startup; the model picker
+		// falls back to live discovery on the first /api/tags poll if this
+		// hasn't completed.
+		go vertexClient.WarmModels(rootCtx)
 	}
 
 	// Publish the build version so /healthz and structured-log preambles can
@@ -189,13 +236,14 @@ func main() {
 
 	mux := api.SetupRoutes(vertexClient)
 
-	// Wrap handlers with: recover-from-panic -> auth -> body-size-limit.
+	// Wrap handlers with: recover-from-panic -> routing-tier -> auth -> body-size-limit.
 	// Order matters: panic recovery is the outermost layer so any later
 	// middleware that panics still returns a clean 500. Auth runs before the
 	// body limiter so unauthorized clients can't consume the body budget.
 	handler := api.RecoverMiddleware(
-		api.AuthMiddleware(authToken,
-			api.BodyLimitMiddleware(int64(maxBodyMB)*1024*1024, mux)))
+		api.RoutingTierMiddleware(
+			api.AuthMiddleware(authToken,
+				api.BodyLimitMiddleware(int64(maxBodyMB)*1024*1024, mux))))
 
 	addr := fmt.Sprintf("%s:%s", bind, port)
 	srv := &http.Server{
@@ -210,8 +258,11 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Starting Cline Vertex Gateway version=%s on %s (auth=%v, max_body=%dMB, write_timeout=%v, loopback=%v)",
-			version, addr, authToken != "", maxBodyMB, writeTimeout, isLoopback(bind))
+		logx.Info("starting Cline Vertex Gateway",
+			"version", version, "addr", addr, "auth", authToken != "",
+			"max_body_mb", maxBodyMB, "write_timeout", writeTimeout.String(),
+			"loopback", isLoopback(bind))
+
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 			return
@@ -223,18 +274,19 @@ func main() {
 	select {
 	case err := <-serverErr:
 		if err != nil {
-			log.Fatalf("Server failed: %v", err)
+			logx.Fatal("server failed", "error", err)
 		}
 	case <-rootCtx.Done():
-		log.Printf("Shutdown signal received; draining for up to %v", shutdownTimeout)
+		logx.Info("shutdown signal received; draining", "timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Graceful shutdown failed: %v; forcing close", err)
+			logx.Error("graceful shutdown failed; forcing close", "error", err)
 			_ = srv.Close()
 		}
 		// Drain serverErr so the goroutine exits.
 		<-serverErr
-		log.Printf("Server stopped cleanly")
+		logx.Info("server stopped cleanly")
 	}
+
 }
