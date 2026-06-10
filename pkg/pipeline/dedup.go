@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go.f0o.dev/cline-vertex-gw/pkg/logx"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -177,8 +178,10 @@ func DedupReplayedBlocks(contents []*genai.Content) []*genai.Content {
 // hash-collision-induced cross-kind matches and gives the placeholder
 // builder a known-offset extraction point for the hash slice.
 func dedupKey(role, text string) string {
-	h := sha256.Sum256([]byte(text))
-	hex := hex.EncodeToString(h[:])[:dedupHashLen]
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, text)
+	h := hasher.Sum(nil)
+	hex := hex.EncodeToString(h)[:dedupHashLen]
 	var sb strings.Builder
 	sb.Grow(len(role) + len("|text|") + len(hex))
 	sb.WriteString(role)
@@ -193,7 +196,7 @@ func dedupKey(role, text string) string {
 // cross-match. Format: "<role>|image|<hexhash>".
 func dedupKeyImage(role, mime string, data []byte) string {
 	hasher := sha256.New()
-	hasher.Write([]byte(mime))
+	_, _ = io.WriteString(hasher, mime)
 	hasher.Write([]byte{0}) // separator so "image/png" + "X" can't collide with "image/pn" + "gX"
 	hasher.Write(data)
 	sum := hasher.Sum(nil)

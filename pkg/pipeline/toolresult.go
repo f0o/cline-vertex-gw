@@ -206,7 +206,9 @@ func middleElide(s string) (string, int) {
 	}
 
 	elided := tailStart - headEnd
-	marker := fmt.Sprintf("\n\n… %d bytes elided (tool result truncated for older turn) …\n\n", elided)
+	// Save original uncompacted text to cache before elision.
+	hash := SaveToElidedCache(s)
+	marker := fmt.Sprintf("\n\n… %d bytes elided (tool result truncated for older turn). Retrieve full content: hash=%s …\n\n", elided, hash)
 	// Only proceed if we actually save more than the marker costs.
 	if elided <= len(marker) {
 		return s, 0

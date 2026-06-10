@@ -147,9 +147,11 @@ func deepCompactFunctionResponse(p *genai.Part) (*genai.Part, int) {
 		for _, k := range toolResultTextKeys {
 			if _, ok := fr.Response[k]; ok {
 				if origStr, ok := fr.Response[k].(string); ok {
-					saved += len(origStr) - len(semanticSummary)
+					hash := SaveToElidedCache(origStr)
+					summaryWithHash := strings.TrimSuffix(semanticSummary, "]") + ". Retrieve full content: hash=" + hash + "]"
+					saved += len(origStr) - len(summaryWithHash)
+					newResp[k] = summaryWithHash
 				}
-				newResp[k] = semanticSummary
 			}
 		}
 	} else {
@@ -210,7 +212,8 @@ func deepMiddleElide(s string) (string, int) {
 	}
 
 	elided := tailStart - headEnd
-	marker := fmt.Sprintf("\n\n… %d bytes elided (stale history deeply compacted) …\n\n", elided)
+	hash := SaveToElidedCache(s)
+	marker := fmt.Sprintf("\n\n… %d bytes elided (stale history deeply compacted). Retrieve full content: hash=%s …\n\n", elided, hash)
 	if elided <= len(marker) {
 		return s, 0
 	}

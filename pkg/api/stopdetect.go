@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"hash/fnv"
 	"os"
 	"strconv"
 	"strings"
@@ -75,13 +74,29 @@ func envIntAPI(name string, def int) int {
 // the configured threshold we declare a loop.
 //
 // LoopDetector is NOT thread-safe; one instance per upstream stream.
+const (
+	offset64 = 14695981039346656037
+	prime64  = 1099511628211
+)
+
+// inlineFNV1a computes the 64-bit FNV-1a hash of a byte slice without allocations.
+func inlineFNV1a(b []byte) uint64 {
+	hash := uint64(offset64)
+	for _, c := range b {
+		hash ^= uint64(c)
+		hash *= prime64
+	}
+	return hash
+}
+
 type LoopDetector struct {
 	enabled   bool
 	window    int // characters of history to retain
 	chunkSize int // size of each hashed substring
 	threshold int // hash count that signals a loop
 
-	buf []byte
+	buf    []byte
+	counts map[uint64]int // recycled to eliminate allocations
 }
 
 // NewLoopDetector returns a detector configured from the package-level env
@@ -101,6 +116,7 @@ func NewLoopDetector() *LoopDetector {
 		d.chunkSize = 64
 	}
 	d.buf = make([]byte, 0, d.window+d.chunkSize)
+	d.counts = make(map[uint64]int, d.window)
 	return d
 }
 
@@ -127,13 +143,11 @@ func (d *LoopDetector) LoopDetected() bool {
 	if len(d.buf) < d.chunkSize*d.threshold {
 		return false
 	}
-	counts := make(map[uint64]int, len(d.buf))
+	clear(d.counts)
 	for i := 0; i+d.chunkSize <= len(d.buf); i++ {
-		h := fnv.New64a()
-		_, _ = h.Write(d.buf[i : i+d.chunkSize])
-		k := h.Sum64()
-		counts[k]++
-		if counts[k] > d.threshold {
+		k := inlineFNV1a(d.buf[i : i+d.chunkSize])
+		d.counts[k]++
+		if d.counts[k] > d.threshold {
 			return true
 		}
 	}

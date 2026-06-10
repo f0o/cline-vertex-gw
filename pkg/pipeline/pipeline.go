@@ -64,6 +64,9 @@ func LogOptimizerPipelineConfiguration() {
 	if dedupSubstring {
 		active = append(active, fmt.Sprintf("dedup_substring(min_bytes=%d)", dedupSubstringMinBytes))
 	}
+	if cacheAlignerEnabled {
+		active = append(active, "cache_aligner")
+	}
 
 	logx.For("optimizer").Info("prompt optimizer pipeline loaded",
 		"active_optimizers", strings.Join(active, ", "),
@@ -103,6 +106,7 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 	//    regex doesn't have to deal with CRLF-ified <environment_details>
 	//    markers (which we haven't observed, but defensively cover).
 	systemPrompt = NormalizeSystemPrompt(systemPrompt)
+	systemPrompt = AlignSystemPromptCache(systemPrompt)
 	contents = NormalizeWhitespace(contents)
 
 	// 2. Collapse stale <environment_details> blocks on every user turn
@@ -153,6 +157,9 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 	if isGemini {
 		contents = AlignFunctionCallsAndResponses(contents)
 	}
+
+	// 6. Inject the dynamic retrieve_elided_content tool if any elided hashes exist in context.
+	InjectRetrieveElidedContentTool(contents, opts)
 
 	return contents, systemPrompt
 }

@@ -30,7 +30,7 @@ run: build
 	./cline-vertex-gw
 
 test:
-	go test -count=1 $(PKGS)
+	go test -count=1 -v $(PKGS)
 
 race:
 	go test -race -count=1 $(PKGS)

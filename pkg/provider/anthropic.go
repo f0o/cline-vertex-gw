@@ -793,9 +793,9 @@ func (vc *VertexClient) anthropicGenerateStream(ctx context.Context, modelID, sy
 		)
 
 		scanner := bufio.NewScanner(resp.Body)
-		// Allow up to 1 MiB per SSE line; default is 64 KiB which is too small
+		// Allow up to 10 MiB per SSE line; default is 64 KiB which is too small
 		// for occasional larger events (e.g. tool call payloads).
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
 		// emitToolCall flushes an inflight tool_use as a FunctionCall chunk
 		// downstream. Buffered argsBuf may be empty (parameterless tool) or

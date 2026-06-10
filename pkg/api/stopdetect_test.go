@@ -221,3 +221,17 @@ func TestEnvIntAPI(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkLoopDetector measures the execution speed and heap allocations
+// of LoopDetected() inside the hot streaming token path.
+func BenchmarkLoopDetector(b *testing.B) {
+	d := NewLoopDetector()
+	// Fill the detector buffer with some text
+	d.Observe(strings.Repeat("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", 10))
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = d.LoopDetected()
+	}
+}

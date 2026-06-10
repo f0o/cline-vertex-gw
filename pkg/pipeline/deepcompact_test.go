@@ -43,13 +43,13 @@ func TestDeepCompactHistoricalTurns(t *testing.T) {
 			Role: "user",
 			Parts: []*genai.Part{
 				{
-					Text: "This is a very long user query that is in the cold history and exceeds our max bytes threshold.",
+					Text: "This is a very long user query that is in the cold history and exceeds our max bytes threshold. " + strings.Repeat("A", 500),
 				},
 				{
 					FunctionResponse: &genai.FunctionResponse{
 						Name: "custom_unregistered_tool",
 						Response: map[string]any{
-							"stdout": "Compilation succeeded with 0 errors and 15 warnings. Emitted binary dist/app.",
+							"stdout": "Compilation succeeded with 0 errors and 15 warnings. Emitted binary dist/app. " + strings.Repeat("B", 500),
 						},
 					},
 				},

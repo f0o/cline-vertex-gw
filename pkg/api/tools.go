@@ -227,6 +227,9 @@ func oaiToolCallToGenaiPart(tc OAIToolCall) *genai.Part {
 		}
 		id = id[:idx]
 	}
+	if len(thoughtSig) == 0 {
+		thoughtSig = []byte("skip_thought_signature_validator")
+	}
 	return &genai.Part{
 		ThoughtSignature: thoughtSig,
 		FunctionCall: &genai.FunctionCall{
@@ -247,6 +250,9 @@ func ollamaToolCallToGenaiPart(tc ToolCall) *genai.Part {
 			thoughtSig = b
 		}
 		id = id[:idx]
+	}
+	if len(thoughtSig) == 0 {
+		thoughtSig = []byte("skip_thought_signature_validator")
 	}
 	return &genai.Part{
 		ThoughtSignature: thoughtSig,

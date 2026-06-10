@@ -289,3 +289,61 @@ func TestAlignFunctionCallsAndResponses_FallbackToNameWhenIDMismatchesButNameMat
 		t.Errorf("expected output to fall back to name and match, got %v", fr.Response["output"])
 	}
 }
+
+func TestAlignFunctionCallsAndResponses_MixedTextAndCallsPositionalAlignment(t *testing.T) {
+	in := []*genai.Content{
+		{
+			Role: genai.RoleModel,
+			Parts: []*genai.Part{
+				{Text: "Model reasoning"},
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "call_1",
+						Name: "list_files",
+					},
+				},
+				{Text: "(superseded read_file call pruned)"},
+			},
+		},
+		{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{
+				{Text: "User message"},
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       "call_1",
+						Name:     "list_files",
+						Response: map[string]any{"output": "list of files"},
+					},
+				},
+				{Text: "(superseded read_file output pruned)"},
+			},
+		},
+	}
+
+	out := AlignFunctionCallsAndResponses(in)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(out))
+	}
+
+	nextParts := out[1].Parts
+	if len(nextParts) != 3 {
+		t.Fatalf("expected 3 parts in aligned turn, got %d", len(nextParts))
+	}
+
+	// Verify perfect positional alignment:
+	// Part 0 is non-response part "User message"
+	if nextParts[0].Text != "User message" {
+		t.Errorf("expected Part 0 to be 'User message', got %q", nextParts[0].Text)
+	}
+
+	// Part 1 is the list_files response (corresponding to list_files call at Part 1 of Turn 1)
+	if nextParts[1].FunctionResponse == nil || nextParts[1].FunctionResponse.Name != "list_files" {
+		t.Errorf("expected Part 1 to be 'list_files' FunctionResponse, got %+v", nextParts[1])
+	}
+
+	// Part 2 is the non-response part "(superseded read_file output pruned)" (corresponding to Text at Part 2 of Turn 1)
+	if nextParts[2].Text != "(superseded read_file output pruned)" {
+		t.Errorf("expected Part 2 to be '(superseded read_file output pruned)', got %q", nextParts[2].Text)
+	}
+}

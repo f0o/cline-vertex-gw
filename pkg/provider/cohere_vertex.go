@@ -548,7 +548,9 @@ func (vc *VertexClient) cohereGenerateStream(ctx context.Context, modelID, syste
 		)
 
 		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		// Allow up to 10 MiB per SSE line; default is 64 KiB which is too small
+		// for occasional larger events (e.g. tool call payloads).
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
 		for scanner.Scan() {
 			if ctx.Err() != nil {

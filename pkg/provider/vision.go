@@ -80,13 +80,17 @@ func publisherSupportsMIME(publisher, modelID, mime string) bool {
 	if strings.HasPrefix(mime, "image/") {
 		return publisherSupportsVision(publisher, modelID)
 	}
+	kind, ok := PublisherKind(publisher)
+	if !ok {
+		return false
+	}
 	if mime == "application/pdf" {
 		// Only Google and Anthropic support PDF natively on Vertex AI.
-		return publisher == "google" || publisher == "anthropic"
+		return kind == adapterGoogle || kind == adapterAnthropic
 	}
 	if strings.HasPrefix(mime, "audio/") || strings.HasPrefix(mime, "video/") {
 		// Only Google supports audio and video natively on Vertex AI.
-		return publisher == "google"
+		return kind == adapterGoogle
 	}
 	return false
 }
@@ -102,8 +106,12 @@ func publisherSupportsMIME(publisher, modelID, mime string) bool {
 // future place where the model id and publisher are available separately.
 func publisherSupportsVision(publisher, modelID string) bool {
 	id := strings.ToLower(modelID)
-	switch publisher {
-	case "google":
+	kind, ok := PublisherKind(publisher)
+	if !ok {
+		return false
+	}
+	switch kind {
+	case adapterGoogle:
 		// Gemini 1.5+ and Gemma 3 are all multimodal. Older Bison/PaLM
 		// aren't, but they're text-completion legacy and not on this gateway.
 		if strings.Contains(id, "gemini") || strings.HasPrefix(id, "gemma-3") {
@@ -113,23 +121,25 @@ func publisherSupportsVision(publisher, modelID string) bool {
 		// reject incompatible payloads with a clear error of its own, and
 		// erring conservative would block legitimate future Gemini variants.
 		return true
-	case "anthropic":
+	case adapterAnthropic:
 		// All Claude 3+ accept image blocks. We don't ship Claude 2.
 		return strings.HasPrefix(id, "claude-")
-	case "meta":
-		// Only the explicit vision SKUs. Plain llama-3.1 / 3.3 do not
-		// accept image_url parts.
-		return strings.Contains(id, "vision") ||
-			strings.HasPrefix(id, "llama-4") // llama-4 is multimodal-by-default
-	case "mistralai":
-		return strings.HasPrefix(id, "pixtral")
-	case "qwen":
-		// qwen2-vl-*, qwen2.5-vl-*, future qwen3-vl-*
-		return strings.Contains(id, "-vl-") || strings.HasSuffix(id, "-vl")
-	case "nvidia":
-		return strings.Contains(id, "vision") || strings.Contains(id, "-vl-")
-	case "cohere", "ai21", "deepseek-ai":
-		// No vision support on Vertex AI today.
+	case adapterOpenAICompat:
+		// Look up the publisher specifically to handle Meta/Mistral/Qwen/Nvidia.
+		// These are specific OpenAICompat models with vision support.
+		switch publisher {
+		case "meta":
+			return strings.Contains(id, "vision") || strings.HasPrefix(id, "llama-4")
+		case "mistralai":
+			return strings.HasPrefix(id, "pixtral")
+		case "qwen":
+			return strings.Contains(id, "-vl-") || strings.HasSuffix(id, "-vl")
+		case "nvidia":
+			return strings.Contains(id, "vision") || strings.Contains(id, "-vl-")
+		default:
+			return false
+		}
+	case adapterCohere, adapterGoogle + 100: // Default cases for text-only
 		return false
 	default:
 		// Unknown publisher: text-only is the safe default.

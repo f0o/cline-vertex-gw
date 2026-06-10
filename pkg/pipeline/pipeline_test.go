@@ -458,3 +458,44 @@ func TestPipeline_CompressionMetricsExtended(t *testing.T) {
 		}
 	}
 }
+
+// TestAlignSystemPromptCache verifies that volatile prefixes are relocated to the suffix.
+func TestAlignSystemPromptCache(t *testing.T) {
+	sys := "This is static system instruction.\nCurrent Date & Time: Wednesday, Jun 10, 2026.\nMore static instructions."
+	got := AlignSystemPromptCache(sys)
+
+	if !strings.Contains(got, "This is static system instruction.") {
+		t.Error("lost static instruction")
+	}
+	if !strings.Contains(got, "=== Volatile Runtime Context") {
+		t.Error("missing volatile section divider")
+	}
+	if !strings.HasSuffix(got, "Current Date & Time: Wednesday, Jun 10, 2026.") {
+		t.Error("volatile timestamp was not relocated to the suffix")
+	}
+}
+
+// TestInjectRetrieveElidedContentTool verifies dynamic tool injection on elided content hashes.
+func TestInjectRetrieveElidedContentTool(t *testing.T) {
+	contents := []*genai.Content{
+		{
+			Role: "user",
+			Parts: []*genai.Part{{
+				Text: "[4,500 bytes elided (tool result truncated for older turn). Retrieve full content: hash=abc123abcdef...]",
+			}},
+		},
+	}
+	opts := &GenerationOptions{
+		Tools: []*genai.Tool{},
+	}
+
+	InjectRetrieveElidedContentTool(contents, opts)
+
+	if len(opts.Tools) != 1 {
+		t.Fatalf("expected tool to be injected, got len: %d", len(opts.Tools))
+	}
+	fd := opts.Tools[0].FunctionDeclarations[0]
+	if fd.Name != "retrieve_elided_content" {
+		t.Errorf("expected retrieve_elided_content, got: %s", fd.Name)
+	}
+}

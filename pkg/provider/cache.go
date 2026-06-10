@@ -91,16 +91,19 @@ const (
 
 // CacheCapabilityFor maps a publisher namespace to its caching capability.
 func CacheCapabilityFor(publisher string) CacheCapability {
-	switch {
-	case publisher == "anthropic":
-		return CacheExplicitInline
-	case publisher == "google":
-		return CacheExplicitResource
-	case publisher == "cohere":
+	kind, ok := PublisherKind(publisher)
+	if !ok {
 		return CacheNone
-	case isOpenAICompatPublisher(publisher):
+	}
+	switch kind {
+	case adapterAnthropic:
+		return CacheExplicitInline
+	case adapterGoogle:
+		return CacheExplicitResource
+	case adapterCohere:
+		return CacheNone
+	case adapterOpenAICompat:
 		return CacheImplicit
-
 	default:
 		return CacheNone
 	}
