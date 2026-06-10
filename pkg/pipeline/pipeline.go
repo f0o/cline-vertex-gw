@@ -125,6 +125,11 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 	//     low-risk because it keeps head+tail and never touches the latest turn.
 	contents = TruncateToolResults(contents)
 
+	// 2b1. Elide massive historical file write and modification tool calls (write_to_file, replace_in_file)
+	//      on assistant turns older than 2 turns. This is completely lossless as full contents are
+	//      saved in FSCache and retrievable on-demand via retrieve_elided_content.
+	contents = ElideHistoricalWriteActions(contents)
+
 	// 2c. Deeply compact cold historical turns (turns older than GW_DEEP_COMPACT_KEEP_TURNS)
 	//     by aggressively shrinking any large text blocks or tool outputs down to tiny
 	//     high-density placeholders. Runs BEFORE TrimContents so that shrunk turns fit

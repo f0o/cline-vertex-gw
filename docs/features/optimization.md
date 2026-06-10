@@ -16,7 +16,8 @@ flowchart TD
     Stage1 --> Stage2[2. Cache Aligner]
     Stage2 --> Stage3[3. Env-Block Collapse]
     Stage3 --> Stage4[4. Tool-Result Truncation CCR]
-    Stage4 --> Stage5[5. Deep Compaction CCR]
+    Stage4 --> Stage4b[4b. Write-Action Elision CCR]
+    Stage4b --> Stage5[5. Deep Compaction CCR]
     Stage5 --> Stage6[6. Image & Text Dedup]
     Stage6 --> Stage7[7. Active Tool Pruning]
     Stage7 --> Outbound[Vertex AI Dispatch]
@@ -58,6 +59,8 @@ Traditional token context managers use "destructive" truncation—permanently pr
 
 - **Config Knobs:**
   - **Tool Truncation:** `GW_TOOL_RESULT_TRUNCATE` (default: `on`), `GW_TOOL_RESULT_MAX_BYTES` (default: `8000`)
+  - **Progressive Retain Window:** `GW_TOOL_RESULT_RETAIN_WINDOW` (default: `3`). Applies mild middle-elision inside the window (retaining headers and trailers of logs) and aggressive complete masking (100% elision) for deep history outside of it.
+  - **Write-Action Elision:** `GW_WRITE_ACTION_ELISION` (default: `on`). Aggressively elides large code write and modification payloads (such as `write_to_file` and `replace_in_file` calls) older than 2 turns to eliminate redundant file dumps in history.
   - **History Compaction:** `GW_DEEP_COMPACT` (default: `off`), `GW_DEEP_COMPACT_KEEP_TURNS` (default: `12`)
 
 ### 5. Image & Text Deduplication (`dedup`)

@@ -75,6 +75,16 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 			out[i] = c
 			continue
 		}
+
+		// Calculate distance to determine if progressive masking should be aggressive.
+		aggressive := false
+		if toolResultRetainWindow > 0 {
+			distance := int32(lastIdx - i)
+			if distance >= toolResultRetainWindow {
+				aggressive = true
+			}
+		}
+
 		nc := &genai.Content{Role: c.Role}
 		if len(c.Parts) > 0 {
 			nc.Parts = make([]*genai.Part, len(c.Parts))
@@ -88,7 +98,7 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 			// in the response map under common keys ("output"/"content"/
 			// "result"/"text"); fall back to plain text parts below.
 			if p.FunctionResponse != nil {
-				np, saved := truncateFunctionResponse(p)
+				np, saved := truncateFunctionResponse(p, aggressive)
 				nc.Parts[j] = np
 				if saved > 0 {
 					totalSaved += saved
@@ -101,7 +111,7 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 				nc.Parts[j] = &np
 				continue
 			}
-			newText, saved := middleElide(p.Text)
+			newText, saved := elideString(p.Text, aggressive)
 			np := *p
 			np.Text = newText
 			nc.Parts[j] = &np
@@ -128,9 +138,9 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 var toolResultTextKeys = []string{"output", "content", "result", "text", "stdout"}
 
 // truncateFunctionResponse returns a copy of a FunctionResponse part with any
-// oversized string payload under a known text key middle-elided, plus the
+// oversized string payload under a known text key middle-elided or aggressively elided, plus the
 // bytes saved. The original part and its Response map are not mutated.
-func truncateFunctionResponse(p *genai.Part) (*genai.Part, int) {
+func truncateFunctionResponse(p *genai.Part, aggressive bool) (*genai.Part, int) {
 	fr := p.FunctionResponse
 	if fr == nil || len(fr.Response) == 0 {
 		np := *p
@@ -147,7 +157,7 @@ func truncateFunctionResponse(p *genai.Part) (*genai.Part, int) {
 		if !ok || int32(len(s)) <= toolResultMaxBytes {
 			continue
 		}
-		newText, s2 := middleElide(s)
+		newText, s2 := elideString(s, aggressive)
 		if s2 <= 0 {
 			continue
 		}
@@ -213,6 +223,25 @@ func middleElide(s string) (string, int) {
 	b.WriteString(marker)
 	b.WriteString(s[tailStart:])
 	return b.String(), elided - len(marker)
+}
+
+// completeElide aggressively compresses the entire tool result string s,
+// saving it to FSCache and returning a compact tombstone containing its SHA-256 hash.
+func completeElide(s string) (string, int) {
+	hash := SaveToElidedCache(s)
+	marker := fmt.Sprintf("[Tool output masked: %d bytes elided. Retrieve full content: hash=%s]", len(s), hash)
+	if len(s) <= len(marker) {
+		return s, 0
+	}
+	return marker, len(s) - len(marker)
+}
+
+// elideString routing helper selects between middleElide and completeElide.
+func elideString(s string, aggressive bool) (string, int) {
+	if aggressive {
+		return completeElide(s)
+	}
+	return middleElide(s)
 }
 
 // snapToNewline nudges byte offset idx to a nearby '\n' boundary (within a

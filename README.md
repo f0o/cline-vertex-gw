@@ -90,7 +90,9 @@ The gateway executes a sequential, 12+ stage prompt optimization pipeline prior 
 - **Whitespace Normalization (`GW_NORMALIZE_WHITESPACE`):** Strips redundant carriage returns, double-spaces, and trailing empty lines from system/user messages.
 - **Prefix Cache Stabilization (`GW_CACHE_ALIGNER`):** Isolates highly volatile runtime variables (such as dynamic date/time strings, temporary session UUIDs, and absolute working directories) and relocates them to the system prompt suffix. This ensures the massive system instruction and tool schema prefix remains 100% stable, guaranteeing up to **90% prompt-cache hit rates** on Anthropic Claude and Gemini.
 - **Environment Block Collapse (`GW_COLLAPSE_ENV_BLOCKS`):** Detects massive system environment paste-ins (like shell variables or directory structures) and collapses them down to a summary if they exceed size thresholds.
-- **Lossless Compress-Cache-Retrieve (CCR) Loops:** Overhauls tool result truncation and history compaction. When massive terminal outputs are elided, high-density placeholders carrying SHA-256 hashes are substituted. A dynamically injected, locally intercepted `retrieve_elided_content` tool allows the model to retrieve the full, raw files from a local file-based cache on-demand.
+- **Lossless Compress-Cache-Retrieve (CCR) Loops:** Overhauls tool result truncation and history compaction. When massive terminal outputs or historical file-write action payloads are elided, high-density placeholders carrying SHA-256 hashes are substituted. A dynamically injected, locally intercepted `retrieve_elided_content` tool allows the model to retrieve the full, raw files or terminal outputs from a local file-based cache on-demand.
+  - **Progressive Observation Masking (`GW_TOOL_RESULT_RETAIN_WINDOW`):** Dynamically applies mild middle-elision for near-history (retaining headers and trailers of logs) and aggressive complete masking (100% elision) for deep-history beyond the retain window.
+  - **Historical Write-Action Elision (`GW_WRITE_ACTION_ELISION`):** Automatically scans historical assistant turns and aggressively elides massive file write/modification payloads (such as in `write_to_file` and `replace_in_file` calls) older than 2 turns.
 - **Active Tool Pruning (`GW_ACTIVE_TOOL_PRUNING`):** Analyzes recent conversation turns and dynamically disables unused tool schemas from the model's active schema catalog to trim active token weights.
 - **Runaway Loop Protection (`GW_BREAK_LOOP_TRAP`):** A high-performance, 0 B/op loop detector watches the streaming output. If a repetitive, infinite tool-calling loop is detected, it cancels the connection, saving hundreds of dollars in automated runtime bills.
 
@@ -158,6 +160,8 @@ Setting the `GW_PROFILE` environment variable configures baseline parameters acr
 | `GW_DEDUP_SUBSTRING_MIN_BYTES`| `1024` | `GW_DEDUP_SUBSTRING_THRESHOLD`| `1024` | `1024` | `512` | `256` |
 | `GW_TOOL_RESULT_TRUNCATE` | `on` | — | `off` | `on` | `on` | `on` |
 | `GW_TOOL_RESULT_MAX_BYTES` | `8000` | `GW_TOOL_TRUNCATE_LIMIT` | `8000` | `8000` | `4096` | `2048` |
+| `GW_TOOL_RESULT_RETAIN_WINDOW` | `3` | — | `5` | `3` | `2` | `1` |
+| `GW_WRITE_ACTION_ELISION` | `on` | — | `off` | `on` | `on` | `on` |
 | `GW_PRUNE_STALE_TOOLS` | `off` | — | `off` | `off` | `on` | `on` |
 | `GW_DEEP_COMPACT` | `off` | — | `off` | `off` | `on` | `on` |
 | `GW_DEEP_COMPACT_KEEP_TURNS` | `12` | — | `12` | `12` | `12` | `8` |

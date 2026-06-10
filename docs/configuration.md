@@ -64,6 +64,8 @@ The gateway provides **5 progressive optimization levels** to compress context w
 | `GW_DEDUP_SUBSTRING_MIN_BYTES`| `1024` | `GW_DEDUP_SUBSTRING_THRESHOLD`| `1024` | `1024` | `512` | `256` |
 | `GW_TOOL_RESULT_TRUNCATE` | `on` | — | `off` | `on` | `on` | `on` |
 | `GW_TOOL_RESULT_MAX_BYTES` | `8000` | `GW_TOOL_TRUNCATE_LIMIT` | `8000` | `8000` | `4096` | `2048` |
+| `GW_TOOL_RESULT_RETAIN_WINDOW` | `3` | — | `5` | `3` | `2` | `1` |
+| `GW_WRITE_ACTION_ELISION` | `on` | — | `off` | `on` | `on` | `on` |
 | `GW_PRUNE_STALE_TOOLS` | `off` | — | `off` | `off` | `on` | `on` |
 | `GW_DEEP_COMPACT` | `off` | — | `off` | `off` | `on` | `on` |
 | `GW_DEEP_COMPACT_KEEP_TURNS` | `12` | — | `12` | `12` | `12` | `8` |

@@ -36,6 +36,8 @@ var (
 	activeToolPruningWindow    int32
 	activeToolPruningWhitelist string
 	maxInputChars              int32
+	toolResultRetainWindow     int32
+	writeActionElision         bool
 )
 
 // ActiveProfileName holds the string representation of the currently loaded profile.
@@ -66,6 +68,8 @@ type profileBaseline struct {
 	ActiveToolPruningWindow    int32
 	ActiveToolPruningWhitelist string
 	MaxInputChars              int32
+	ToolResultRetainWindow     int32
+	WriteActionElision         bool
 }
 
 func init() {
@@ -107,6 +111,7 @@ func LoadConfig() {
 	toolResultMaxBytes = envInt32WithFallback("GW_TOOL_RESULT_MAX_BYTES", "GW_TOOL_TRUNCATE_LIMIT", baseline.ToolResultMaxBytes)
 	toolResultHeadBytes = envInt32("GW_TOOL_RESULT_HEAD_BYTES", baseline.ToolResultHeadBytes)
 	toolResultTailBytes = envInt32("GW_TOOL_RESULT_TAIL_BYTES", baseline.ToolResultTailBytes)
+	toolResultRetainWindow = envInt32("GW_TOOL_RESULT_RETAIN_WINDOW", baseline.ToolResultRetainWindow)
 
 	// 6. Stale Tool Pruning
 	pruneStaleTools = envBool("GW_PRUNE_STALE_TOOLS", baseline.PruneStaleTools)
@@ -125,6 +130,9 @@ func LoadConfig() {
 
 	// 9. Context Trim
 	maxInputChars = envInt32("GW_MAX_INPUT_CHARS", baseline.MaxInputChars)
+
+	// 10. Write Action Elision
+	writeActionElision = envBool("GW_WRITE_ACTION_ELISION", baseline.WriteActionElision)
 }
 
 // getProfileBaseline maps the profile string or integer to the baseline settings.
@@ -160,6 +168,8 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ActiveToolPruningWindow:    20,
 			ActiveToolPruningWhitelist: defaultWhitelist,
 			MaxInputChars:              0,
+			ToolResultRetainWindow:     0,
+			WriteActionElision:         false,
 		}, "1. Pass-Through (Raw)"
 
 	case "2", "gentle", "conservative":
@@ -188,6 +198,8 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ActiveToolPruningWindow:    20,
 			ActiveToolPruningWhitelist: defaultWhitelist,
 			MaxInputChars:              0,
+			ToolResultRetainWindow:     5,
+			WriteActionElision:         false,
 		}, "2. Gentle"
 
 	case "4", "aggressive":
@@ -216,6 +228,8 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ActiveToolPruningWindow:    20,
 			ActiveToolPruningWhitelist: defaultWhitelist,
 			MaxInputChars:              0,
+			ToolResultRetainWindow:     2,
+			WriteActionElision:         true,
 		}, "4. Aggressive"
 
 	case "5", "extreme", "squeeze":
@@ -244,6 +258,8 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ActiveToolPruningWindow:    10,
 			ActiveToolPruningWhitelist: extremeWhitelist,
 			MaxInputChars:              350000,
+			ToolResultRetainWindow:     1,
+			WriteActionElision:         true,
 		}, "5. Extreme Squeeze"
 
 	case "3", "balanced", "default":
@@ -275,6 +291,8 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ActiveToolPruningWindow:    20,
 			ActiveToolPruningWhitelist: defaultWhitelist,
 			MaxInputChars:              0,
+			ToolResultRetainWindow:     3,
+			WriteActionElision:         true,
 		}, "3. Balanced (Default)"
 	}
 }
