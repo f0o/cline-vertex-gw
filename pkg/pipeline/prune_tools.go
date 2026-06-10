@@ -45,7 +45,6 @@ var logPruneTools = logx.Scoped("prune-tools")
 //     tool exchanges.
 //
 // Original contents are never mutated; a new slice is returned.
-var pruneStaleTools = envBool("GW_PRUNE_STALE_TOOLS", false)
 
 // readOnlyTools are idempotent inspection tools whose older invocations can be
 // safely dropped once superseded by a later identical call. Mutating tools

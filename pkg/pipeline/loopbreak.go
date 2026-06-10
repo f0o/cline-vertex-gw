@@ -18,10 +18,6 @@ var logLoopbreak = logx.Scoped("loopbreak")
 //
 //   - GW_LOOP_TRAP_NUDGE (default: on)
 //     Enables appending a helpful, clear tool-use nudge to the latest user scolding turn.
-var (
-	breakLoopTrapEnabled = envBool("GW_BREAK_LOOP_TRAP", true)
-	loopTrapNudgeEnabled = envBool("GW_LOOP_TRAP_NUDGE", true)
-)
 
 // BreakLoopTrap processes the conversation history to detect and resolve
 // LLM loop-traps caused by repetitive automated client scoldings

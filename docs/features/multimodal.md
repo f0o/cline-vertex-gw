@@ -1,12 +1,12 @@
 # Multimodal Input Support
 
-`cline-vertex-gw` provides comprehensive, high-performance multimodal capabilities on both the Ollama (`/api/chat`) and OpenAI (`/v1/chat/completions`) surfaces.
+`cline-vertex-gw` provides robust, high-performance multimodal support on both the Ollama (`/api/chat`) and OpenAI (`/v1/chat/completions`) surface handlers.
 
 ---
 
 ## Supported Media Types
 
-The gateway accepts an expansive array of mime types across four major categories of media:
+The gateway supports an expansive array of mime types across four major categories of media:
 
 | Category | MIME Types | Supported Upstream Publishers |
 |---|---|---|
@@ -17,14 +17,16 @@ The gateway accepts an expansive array of mime types across four major categorie
 
 ---
 
-## Core Systems & Implementation
+## Core Media Systems
 
-### 1. Robust Magic-Bytes Sniffing (`sniffMediaMIME`)
+### 1. Magic-Bytes Sniffing (`sniffMediaMIME`)
 On the Ollama surface, clients send files inside a flat `images` array containing base64-encoded strings, without providing explicit MIME types. 
-To determine how to translate these parts, the gateway employs an internal **magic-bytes sniffer** (`sniffMediaMIME`). It parses the first few bytes of the decoded file header to accurately resolve standard formats (including PNG, JPEG, GIF, WebP, PDF, WAV, MP3, MP4, FLAC, Ogg, and AVI). 
+
+To determine how to translate these parts, the gateway employs an internal **magic-bytes sniffer** (`sniffMediaMIME`). It parses the first few bytes of the decoded file header to accurately resolve standard formats (including PNG, JPEG, GIF, WebP, PDF, WAV, MP3, MP4, FLAC, Ogg, and AVI).
 
 ### 2. Upstream Capability Validation (`publisherSupportsMIME`)
 Different model publishers hosted on Vertex AI have varying native restrictions on multimodal inputs (e.g. Gemini supports everything; Claude supports images and PDFs; Meta/Mistral/Qwen support images only).
+
 To prevent confusing, mid-stream failures, the gateway validates request attachments at the gate using `publisherSupportsMIME`. Sending an unsupported file type to a model (e.g., a PDF to a text-only Llama model) returns a clean, parseable `400 Bad Request` explaining exactly what is wrong and recommending alternative model families:
 
 ```json

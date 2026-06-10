@@ -1,33 +1,31 @@
 # Development Guide
 
-This document outlines how to build, test, and contribute to `cline-vertex-gw`.
+This guide outlines the compilation, testing, and CI/CD operations for contributing to `cline-vertex-gw`.
 
 ---
 
 ## 1. Local Building
 
-To build the gateway locally, ensure you have Go (version 1.22+ or 1.26 recommended) installed.
+To build and compile the gateway locally, ensure you have Go (Go 1.22+ or 1.26 recommended) installed.
 
-### Makefile Commands
+### Makefile Operations
+The project contains a pre-configured `Makefile` to simplify common actions:
 
-The project includes a robust `Makefile` for standard tasks:
-
-- **Build Binary:** Compiles the optimized binary, injecting the git-derived version string.
+- **Compile Optimized Binary:**
   ```bash
   make build
   ```
-- **Run Tests:** Runs the full test suite with race-detection enabled.
-  ```bash
-  make test
-  ```
-- **Code Linting:** Checks code style and formatting.
+- **Execute Linting and Vet checks:**
   ```bash
   make vet
   ```
+- **Run Full Test Suite (Race Detection Enabled):**
+  ```bash
+  make test
+  ```
 
 ### Manual Compilation
-
-Alternatively, you can compile manually using standard Go commands:
+To compile the binary manually while injecting Git release tags and version metadata, run:
 
 ```bash
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -36,42 +34,39 @@ go build -ldflags "-s -w -X main.version=${VERSION}" -o cline-vertex-gw .
 
 ---
 
-## 2. Testing Setup & Layout
+## 2. Testing Framework & Layout
 
-The project places extreme emphasis on testing precision and reliability. All tests are clean and pass under `go test -race ./...`.
+The project enforces extreme reliability through structured testing. All tests are thread-safe and must run cleanly with the `-race` detector enabled.
 
-The codebase is organized into several types of tests:
-1. **Unit Tests:** Located alongside files (e.g., `pkg/api/middleware_test.go`, `pkg/provider/vertex_test.go`). These mock upstream calls and verify handler behaviors, compression pipelines, and tool calling translations.
-2. **Capability / Upstream Integration Tests:** Validate exact translations of complex formats (multimodal magic sniffing, Claude PDF document conversion, tool definitions translation).
-3. **Concurrency / Race Suite:** Every helper is tested under full concurrency using Go's race detector to ensure no shared memory state issues occur under heavy multi-agent traffic.
+### Codebase Test Types
+1. **Unit Tests:** Placed adjacent to implementation source files (e.g. `pkg/api/middleware_test.go`, `pkg/provider/vertex_test.go`). These mock upstream APIs and verify edge cases, configurations, and handler responses.
+2. **Translation & Pipeline Tests:** Validate complex conversion loops, including multimodal magic-bytes sniffing, Anthropic PDF translation, and prompt optimization compression stages.
+3. **Concurrency & Thread Safety Suite:** Heavily stress-tests shared utility structs (like tags cache and token ratelimit buffers) under parallel load.
 
-### Running Test Commands
+### Running Tests
 
-- **Run all tests:**
-  ```bash
-  go test -race -v ./...
-  ```
-- **Run tests with coverage analysis:**
-  ```bash
-  go test -coverprofile=coverage.out ./...
-  go tool cover -html=coverage.out
-  ```
+```bash
+# Run the complete test suite with race-detection
+go test -race -v ./...
+
+# Run tests and output HTML coverage reports
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
+```
 
 ---
 
-## 3. GitHub Actions CI/CD Pipeline
+## 3. GitHub Actions CI/CD Pipelines
 
-The project integrates a comprehensive CI/CD workflow defined in `.github/workflows/ci.yml`.
+The repository features an automated workflow configured in `.github/workflows/ci.yml`.
 
-### On PR / Push to `main`:
-- Runs code verification (`go vet`).
-- Compiles the binary across platform configurations.
-- Runs the test suite with the race detector.
-- Generates and uploads code coverage artifacts.
-- Automatically builds multi-arch (`amd64` and `arm64`) Docker images using Docker Buildx and pushes `edge` tags to the GitHub Container Registry (GHCR).
+### A. Actions on Pull Request or Push to `main`
+- Runs static analysis and structural code checks (`go vet`).
+- Executes the entire test suite with the Go race-detector active.
+- Compiles the application across multiple standard OS configurations.
+- Performs multi-platform Docker builds (arm64 & amd64) and publishes bleeding-edge containers tagged with `edge` to the GitHub Container Registry (GHCR).
 
-### On Release Tag (`v*`):
-- Executes all core validation tests.
-- Triggers **GoReleaser** (`.goreleaser.yaml`) to cross-compile, compress, hash, and package production-ready binaries for Linux, macOS, and Windows across several architectures.
-- Creates a new GitHub Release with the package binaries attached.
-- Builds and publishes the official multi-architecture Docker image tagged with `latest` and the semantic version string to GHCR.
+### B. Actions on Semantic Release Tags (`v*`)
+- Executes strict release pre-validations and tests.
+- Triggers **GoReleaser** to cross-compile, compress, hash, and publish production binaries (for Linux, macOS, and Windows) as a new GitHub Release.
+- Compiles and publishes multi-architecture Docker containers tagged with `latest` and the precise release version to GHCR.

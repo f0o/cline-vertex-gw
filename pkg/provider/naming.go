@@ -149,13 +149,6 @@ func PublisherKind(publisher string) (adapterKind, bool) {
 	return info.kind, true
 }
 
-// isOpenAICompatPublisher reports whether a publisher uses the shared
-// OpenAI-compatible chat-completions adapter.
-func isOpenAICompatPublisher(publisher string) bool {
-	kind, ok := PublisherKind(publisher)
-	return ok && kind == adapterOpenAICompat
-}
-
 // errUnsupportedPublisher is returned by Generate/GenerateStream when the
 // inferred publisher namespace doesn't have a Vertex AI adapter implemented
 // in this gateway yet. It surfaces a clearer error than the underlying SDK's

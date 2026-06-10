@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-var (
-	cacheAlignerEnabled = envBool("GW_CACHE_ALIGNER", true)
-)
-
 var logCacheAligner = logx.Scoped("cache_aligner")
 
 // AlignSystemPromptCache stabilizes the prefix of the system prompt by isolating

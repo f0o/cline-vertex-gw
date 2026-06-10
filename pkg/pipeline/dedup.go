@@ -49,10 +49,6 @@ var logDedup = logx.Scoped("dedup")
 //
 // Like the other compressors this runs at the dispatch layer so all
 // publishers benefit uniformly.
-var (
-	dedupReplay   = envBool("GW_DEDUP_REPLAY", true)
-	dedupMinBytes = envInt32("GW_DEDUP_MIN_BYTES", 512)
-)
 
 // dedupHash is a short hex prefix of SHA-256(text). 16 hex chars = 64 bits
 // of address space, which gives ~5×10⁻²⁰ collision probability for any

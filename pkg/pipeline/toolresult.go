@@ -43,12 +43,6 @@ var logToolresult = logx.Scoped("toolresult")
 //
 // Like the other compressors this runs at the dispatch layer so all
 // publishers benefit uniformly.
-var (
-	toolResultTruncate  = envBool("GW_TOOL_RESULT_TRUNCATE", true)
-	toolResultMaxBytes  = envInt32("GW_TOOL_RESULT_MAX_BYTES", 8000)
-	toolResultHeadBytes = envInt32("GW_TOOL_RESULT_HEAD_BYTES", 2000)
-	toolResultTailBytes = envInt32("GW_TOOL_RESULT_TAIL_BYTES", 1000)
-)
 
 // TruncateToolResults returns a copy of contents in which oversized
 // tool-result text on every turn except the last is middle-elided to a

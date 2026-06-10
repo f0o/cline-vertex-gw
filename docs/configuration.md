@@ -1,69 +1,122 @@
-# Configuration
+# Configuration Manual
 
-All configuration for `cline-vertex-gw` is done via environment variables.
+All configurations for `cline-vertex-gw` are managed through environment variables. The gateway does not require any static configuration files.
 
-## Global Environment Variables
+---
 
-The following table lists all available configuration environment variables, their defaults, and their purpose:
+## Server Environment Variables
 
-| Variable | Default | Purpose |
-|---|---|---|
+The following table lists all general server configuration variables:
+
+| Variable | Default Value | Purpose / Constraint |
+|---|:---:|---|
 | `PORT` | `11434` | TCP port to listen on. |
-| `BIND_ADDR` | `127.0.0.1` (loopback only) | Interface to bind on. Loopback-by-default for safety; set to `0.0.0.0` (or a specific interface) to expose, typically only behind a reverse proxy that handles TLS and auth. The container image overrides this to `0.0.0.0` because a container's loopback is unreachable from the host. |
-| `GOOGLE_CLOUD_PROJECT` | — | GCP project ID. **Required** for Vertex AI API calls. |
-| `GOOGLE_CLOUD_LOCATION` | — | Vertex AI location region (e.g., `us-central1`, `us-east5`, `europe-west4`, etc.). |
-| `GATEWAY_AUTH_TOKEN` | _empty_ | If set, every `/api/*` and `/v1/*` request must carry `Authorization: Bearer <token>`. **Recommended** whenever `BIND_ADDR` is not loopback. |
-| `MAX_REQUEST_MB` | `16` | Per-request body cap. Bodies larger than this return `413 Request Entity Too Large`. |
-| `READ_HEADER_TIMEOUT_SEC` | `10` | Server `ReadHeaderTimeout` in seconds. Mitigates slowloris attacks. |
-| `IDLE_TIMEOUT_SEC` | `120` | Keep-alive idle timeout in seconds. |
-| `WRITE_TIMEOUT_SEC` | `0` (disabled) | Server-level write timeout in seconds. **Leave 0** unless you front the gateway with a load balancer that enforces its own; long completions stream for many seconds and will be truncated otherwise. |
-| `SHUTDOWN_TIMEOUT_SEC` | `30` | Max time in seconds to drain in-flight requests on SIGTERM. |
-| `LOG_FORMAT` | `json` | `json` (structured, for aggregators) or `text` (human-readable). |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
-| `GW_TAGS_CACHE_TTL_SEC` | `60` | TTL in seconds for the in-memory `/api/tags` and `/v1/models` cache. Cline's model picker polls this endpoint aggressively; caching cuts the fan-out across multiple publishers down to once per minute. Set to `0` to disable. |
-| `GW_MAX_MEDIA_BYTES_PER_PART` | `10485760` (10 MiB) | Per-media (images, audio, video, PDF) size cap on the **decoded** bytes. Requests with a larger file return a `400 Bad Request`. |
-| `GW_MAX_MEDIA_BYTES_PER_REQUEST` | `33554432` (32 MiB) | Aggregate cap across **all** decoded media in a single request. |
-| `GW_PRICING` | `on` | Cost estimation toggle. When on, the gateway scrapes per-token prices live from the GCP **Cloud Billing Catalog API** and prints a per-request USD breakdown alongside the request stats (and feeds the `cline_vertex_gw_estimated_cost_usd_total` metric). Set to `off`/`false`/`0` to disable all pricing scrapes and cost output. |
-| `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Refresh interval in seconds for the live pricing table. Prices change on the order of months, so the catalog is scraped at most once per interval (warmed once at startup, then refreshed lazily in the background on request completion). |
-| `GW_PRICING_DEBUG` | `off` | When on, the pricing scrape logs a verbose diagnostic dump (`[pricing][debug]`): the matched/not-matched billing services, a per-SKU resolution trace, and the final per-model resolved rate table. Use it to verify or troubleshoot the SKU→model/rate mapping against your project's catalog. |
-| `GW_PRICING_TIER` | `low` | Overrides or sets specific pricing tiers for models when using custom billing profiles or MaaS. Set to `low` (default), `medium`, or `high`. |
-| `GW_GEMINI_SEARCH_GROUNDING` | _empty_ | Enable native Vertex Google Search Grounding / WebSearch for Gemini models. Set to `google_search` (standard Google Search) or `enterprise_web_search` (requires a Vertex AI Search data store setup) to enable globally. Also triggered dynamically per-request if the client passes a tool/function named `web_search` or `google_search`. |
-| `GW_GEMINI_SEARCH_THRESHOLD` | `-1.0` (disabled) | Optional dynamic search triggering threshold (float, e.g. `0.5`). Lower values trigger search more conservatively when the model lacks confidence; `-1.0` uses Google's default. Only evaluated when Google Search Grounding is active. |
+| `BIND_ADDR` | `127.0.0.1` | Network interface to bind. Defaults to local loopback only for safety. Set to `0.0.0.0` in Docker. |
+| `GOOGLE_CLOUD_PROJECT` | _required_ | Google Cloud Project ID. |
+| `GOOGLE_CLOUD_LOCATION` | _required_ | Vertex AI location region (e.g., `us-central1`, `us-east5`, `europe-west4`, etc.). |
+| `GATEWAY_AUTH_TOKEN` | _empty_ | If set, every API request must carry a matching `Authorization: Bearer <token>` header. |
+| `MAX_REQUEST_MB` | `16` | Per-request body cap (in MiB). Requests larger than this return `413 Request Entity Too Large`. |
+| `READ_HEADER_TIMEOUT_SEC` | `10` | Server `ReadHeaderTimeout` in seconds, protecting against Slowloris attacks. |
+| `IDLE_TIMEOUT_SEC` | `120` | Keep-alive idle socket timeout in seconds. |
+| `WRITE_TIMEOUT_SEC` | `0` | Server-level write timeout in seconds. **Leave at 0** for streaming endpoints. |
+| `SHUTDOWN_TIMEOUT_SEC` | `30` | Max time (seconds) to wait for draining active requests upon SIGTERM. |
+| `LOG_LEVEL` | `info` | Logging verbosity: `debug` \| `info` \| `warn` \| `error`. |
+| `LOG_FORMAT` | `json` | Logging format layout: `json` (structured logs) \| `text` (human-readable). |
+| `GW_TAGS_CACHE_TTL_SEC` | `60` | TTL in seconds for the model discovery tags cache to optimize aggressive picker polling. |
 
 ---
 
-## Authentication & Credentials
+## Google Cloud Authentication
 
-The gateway relies on standard **Google Application Default Credentials (ADC)**. No gateway-specific GCP environment variables or configuration files are needed beyond the core `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` settings.
+The gateway utilizes Google's standard **Application Default Credentials (ADC)**. No custom credentials or secrets files are configured inside the gateway. The runtime resolves ADC in the following order:
 
-The authentication is resolved in order:
-1. Credentials pointed to by the `GOOGLE_APPLICATION_CREDENTIALS` environment variable (JSON file path).
-2. Credentials provided by the local developer environment via `gcloud auth application-default login`.
-3. The default service account attached to the Google Cloud resource (Cloud Run, GKE, GCE) when deployed in GCP.
+1. **`GOOGLE_APPLICATION_CREDENTIALS`:** Environment variable pointing to a JSON service account key file.
+2. **`gcloud` Authenticated User:** Local development session authenticated via `gcloud auth application-default login`.
+3. **Attached Service Account:** The default service account attached to the Google Cloud hosting resource (e.g. Cloud Run, GKE, GCE) when deployed in GCP.
 
 ---
 
-## Operator & Administrative Endpoints
+## Token-Cost Optimization Profiles (`GW_PROFILE`)
 
-The gateway exposes five operator-facing endpoints. All five endpoints are **unauthenticated by design**, meaning health-checks, liveness probes, and metrics scrapers do not need to provide a bearer token even if `GATEWAY_AUTH_TOKEN` is set.
+The gateway provides **5 progressive optimization levels** to compress context windows and maximize cache efficiency. Setting the `GW_PROFILE` environment variable applies a curated set of baseline parameters. Individual `GW_*` environment variables can still be set alongside `GW_PROFILE` to explicitly override parameters.
 
-| Endpoint | Method | Purpose | Response Format |
-|---|---|---|---|
-| `/healthz` | `GET` | Liveness check. Returns gateway status, version, uptime, and Go runtime version. Does not touch upstream services. | JSON |
-| `/readyz` | `GET` | Readiness check. Returns `200 OK` when the Vertex client is fully configured; `503 Service Unavailable` with a `reasons` array if it is not. | JSON |
-| `/version` | `GET` | Retrieves the gateway's build version string. Useful for automated deployments and checking release drift. | JSON |
-| `/metrics` | `GET` | Exposes standard Prometheus text-exposition (v0.0.4) metrics. Includes counters, histograms, and gauges for request count, latency, tokens, cost, and compression statistics. | Plain Text |
-| `/` | `GET` | Legacy plain-text liveness response. Maintained for backward compatibility with older scrapers and load balancers. | Plain Text |
+### Supported Profiles
+
+1. **`passthrough` / `raw` / `1`:** Turns off all prompt modifications. Raw input is sent upstream.
+2. **`gentle` / `conservative` / `2`:** Activates non-destructive optimizations like whitespace normalization and cache alignment.
+3. **`balanced` / `default` / `3` (Default):** Evaluates a balanced baseline of context reduction and protection loops.
+4. **`aggressive` / `4`:** Actively compresses history, collapses environment blocks, and trims read-only tool cycles.
+5. **`extreme` / `squeeze` / `5`:** Maximizes prompt shrinkage with small truncation limits and aggressive active tool pruning.
+
+### Detailed Optimization Parameters
+
+| Parameter / Knob | Standard Default | Fallback Env Alias | Gentle (2) | Balanced (3) | Aggressive (4) | Extreme (5) |
+|---|:---:|---|:---:|:---:|:---:|:---:|
+| `GW_NORMALIZE_WHITESPACE` | `on` | — | `on` | `on` | `on` | `on` |
+| `GW_CACHE_ALIGNER` | `on` | — | `on` | `on` | `on` | `on` |
+| `GW_BREAK_LOOP_TRAP` | `on` | — | `on` | `on` | `on` | `on` |
+| `GW_LOOP_TRAP_NUDGE` | `on` | — | `off` | `on` | `on` | `on` |
+| `GW_COLLAPSE_ENV_BLOCKS` | `on` | — | `on` | `on` | `on` | `on` |
+| `GW_COLLAPSE_ENV_MIN_BYTES` | `256` | `GW_COLLAPSE_ENV_THRESHOLD` | `1024` | `256` | `128` | `64` |
+| `GW_DEDUP_REPLAY` | `on` | — | `on` | `on` | `on` | `on` |
+| `GW_DEDUP_MIN_BYTES` | `512` | `GW_DEDUP_THRESHOLD` | `1024` | `512` | `256` | `128` |
+| `GW_DEDUP_SUBSTRING` | `off` | — | `off` | `off` | `on` | `on` |
+| `GW_DEDUP_SUBSTRING_MIN_BYTES`| `1024` | `GW_DEDUP_SUBSTRING_THRESHOLD`| `1024` | `1024` | `512` | `256` |
+| `GW_TOOL_RESULT_TRUNCATE` | `on` | — | `off` | `on` | `on` | `on` |
+| `GW_TOOL_RESULT_MAX_BYTES` | `8000` | `GW_TOOL_TRUNCATE_LIMIT` | `8000` | `8000` | `4096` | `2048` |
+| `GW_PRUNE_STALE_TOOLS` | `off` | — | `off` | `off` | `on` | `on` |
+| `GW_DEEP_COMPACT` | `off` | — | `off` | `off` | `on` | `on` |
+| `GW_DEEP_COMPACT_KEEP_TURNS` | `12` | — | `12` | `12` | `12` | `8` |
+| `GW_DEEP_COMPACT_MAX_BYTES` | `500` | — | `500` | `500` | `500` | `250` |
+| `GW_ACTIVE_TOOL_PRUNING` | `off` | — | `off` | `off` | `on` | `on` |
+| `GW_ACTIVE_TOOL_PRUNING_WINDOW`| `20` | — | `20` | `20` | `20` | `10` |
+| `GW_MAX_INPUT_CHARS` | `0` (unlim) | — | `0` | `0` | `0` | `350000` |
+
+---
+
+## Live Cost Estimation & Billing Settings
+
+To track costs, the gateway resolves prices directly from the public Google Cloud Billing catalog on startup.
+
+| Variable | Default Value | Purpose / Constraints |
+|---|:---:|---|
+| `GW_PRICING` | `on` | Cost estimation toggle. Set to `off` to disable price catalog scrapes and logs. |
+| `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Interval in seconds to lazily refresh cached pricing rates from Google Billing Catalog. |
+| `GW_PRICING_DEBUG` | `off` | When set to `on`, outputs extremely verbose trace logs during startup SKU resolution. |
+
+---
+
+## Google Search Grounding Settings
+
+Enables native web-search grounding over Google Search for Gemini models:
+
+| Variable | Default Value | Purpose / Constraints |
+|---|:---:|---|
+| `GW_GEMINI_SEARCH_GROUNDING` | _empty_ | Set to `google_search` or `enterprise_web_search` to force search on Gemini queries. |
+| `GW_GEMINI_SEARCH_THRESHOLD` | `-1.0` (disabled) | Dynamic threshold (float, e.g., `0.5`) to trigger search when confidence drops. |
+
+---
+
+## Administrative Endpoints
+
+The gateway exposes five operator-facing endpoints. These endpoints are **permanently unauthenticated** by design to simplify health probes, deploy automations, and metrics pulling.
+
+| Endpoint | Method | Purpose / Response Shape |
+|---|:---:|---|
+| `/healthz` | `GET` | Return JSON detailing gateway liveness, version, runtime details, and uptime. |
+| `/readyz` | `GET` | Return `200 OK` JSON when Vertex AI client is ready; `503 Service Unavailable` with details otherwise. |
+| `/version` | `GET` | Retrieves the gateway's build version string. |
+| `/metrics` | `GET` | Exposes standard Prometheus text-exposition metrics for log/monitoring aggregators. |
+| `/` | `GET` | Legacy raw plain-text liveness response (`"cline-vertex-gw running..."`). |
 
 ---
 
 ## Build Version Injection
 
-To make the `/healthz`, `/version`, the startup log line, and the `cline_vertex_gw_build_info` metric report meaningful version strings, inject the version at build time using Go linker flags:
+To make version reporting across `/healthz`, `/version`, and metrics meaningful, inject the Git version string at compile time using Go linker flags:
 
 ```bash
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
 go build -ldflags "-s -w -X main.version=${VERSION}" -o cline-vertex-gw .
 ```
-
-The provided `Makefile` (`make build`) and `Dockerfile` (`--build-arg VERSION=...`) handle this injection automatically.
+The included `Makefile` and standard container `Dockerfile` run this command automatically.

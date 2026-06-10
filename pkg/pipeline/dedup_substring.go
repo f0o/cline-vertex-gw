@@ -47,10 +47,6 @@ var logDedupSub = logx.Scoped("dedup-substring")
 //
 // Runs AFTER DedupReplayedBlocks (exact dedup is cheaper and strictly subset)
 // so we don't re-scan blocks already collapsed to a placeholder.
-var (
-	dedupSubstring         = envBool("GW_DEDUP_SUBSTRING", false)
-	dedupSubstringMinBytes = envInt32("GW_DEDUP_SUBSTRING_MIN_BYTES", 1024)
-)
 
 // substringNeedle is an earlier large text block recorded as a candidate to
 // search for inside later same-role turns.

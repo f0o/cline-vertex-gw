@@ -30,7 +30,6 @@ var logTrim = logx.Scoped("trim")
 // 0 disables trimming entirely (default). Setting this should be safe even
 // with prompt caching on: the cache prefix may be invalidated after a trim
 // but will warm again on the next request that fits.
-var maxInputChars = envInt32("GW_MAX_INPUT_CHARS", 0)
 
 // minRetainedTurns is the floor on how many recent messages we'll keep even
 // when nothing fits the budget. Without this, an oversized single message

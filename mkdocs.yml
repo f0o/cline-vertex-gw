@@ -36,7 +36,8 @@ nav:
   - Features:
       - Multimodal Support: features/multimodal.md
       - Tool Calling: features/tool_calling.md
-      - Metrics & Cost Tracking: features/cost_metrics.md
+      - Prometheus Metrics: features/metrics.md
+      - Cost Estimation: features/cost_estimation.md
       - Token-Cost Optimization: features/optimization.md
   - API Reference: api_reference.md
   - Development Guide: development.md

@@ -1,143 +1,77 @@
-# Token-Cost Optimization
+# Token-Cost Optimization Pipeline
 
-`cline-vertex-gw` sits between your client and Vertex AI, providing an intelligent **Token-Cost Optimization Pipeline** to dramatically shrink your context footprint and reduce API costs.
+`cline-vertex-gw` includes an intelligent, multi-stage **Token-Cost Optimization Pipeline** to dramatically shrink your context footprint and reduce upstream API billing.
 
-In a benchmark conversation (a 5-turn Cline session with a repeated 3 KB file paste + a 3 KB environment block on every user turn), this pipeline produces an end-to-end **64% input byte-count reduction** on top of Google/Anthropic's native prompt caching.
-
----
-
-## 1. The Optimization Pipeline
-
-The pipeline runs sequentially on inbound messages before they are dispatched to the upstream publisher. It consists of several distinct stages:
-
-### White-Space & Comment Normalization (`normalize`)
-Reduces redundant spacing, carriage returns, trailing empty lines, and standard format comments in code/text blocks. This clean-up can save up to 5-10% of raw text space without affecting meaning or syntax.
-- **Toggle:** `export GW_NORMALIZE_WHITESPACE=off` (defaults to `on`)
-
-### Interactive Environment Block Collapsing (`envblocks`)
-LLM agents (like Cline) often append massive environment variable dumps, file lists, or status blocks on *every single turn*.
-- The pipeline identifies these massive, redundant blocks across your conversation history.
-- It automatically collapses older, identical copies of these blocks into small 1-line pointers (e.g. `[env block collapsed, saved 3200B]`).
-- **Critical Safety Guard:** The **latest user turn** is explicitly exempted from collapsing, ensuring the model always sees the exact, current system and environment state.
-- **Toggle:** `export GW_COLLAPSE_ENV_BLOCKS=off` (defaults to `on`)
-
-### Multimodal Part-Level Deduplication (`dedup`)
-Agent tools often upload identical file attachments or screenshots repeatedly. This stage hashes attachments and drops duplicate assets, replacing them with standard back-references (e.g. `[image matched turn 2, saved 810KB]`).
-- **Toggle:** `export GW_DEDUP_REPLAY=off` (defaults to `on`)
-- **Substring Deduplication:** High-density substring-level deduplication is also available (`export GW_DEDUP_SUBSTRING=on`), but is disabled by default because it rewrites the interiors of text turns.
-
-### Interactive Tool Pruning & Truncation (`toolresult`)
-When multi-part agents are executing long-running tasks, their history accumulates massive logs from terminal runs or file content reads.
-- **Stale Tool Pruning:** Automatically drops matched tool call-and-response pairs from the history if they represent read-only, idempotent operations that have been superseded by subsequent actions. It always removes the call + response together to preserve role alternation.
-- **Tool-Result Truncation:** Caps extremely large tool outputs (such as massive stack traces or long directory listings) by keeping a portion of the head and tail while discarding the middle, injecting a clear truncation notice in between.
-- **Safety Guard:** Truncation is evaluated before other metrics to ensure the budget sees already shrunken sizes, and it never touches the latest turn.
-
-### Deep Historical Turn Compaction & Collapsing (`deepcompact`)
-As agentic workloads run beyond 40-50 turns (and up to 100+ turns), the cumulative size of past tool outputs, large file dumps, and status logs creates massive context overhead.
-- **Deep Compaction:** Targets "cold" historical turns (turns older than a sliding keep window of e.g. 12 turns).
-- **Fully Semantic Collapsing (Strategy B):** Instead of generic text elisions, `deepcompact` semantically recognizes known bulky tool outputs (`read_file`, `execute_command`, `web_search`, `web_fetch`) and collapses them into concise formatted strings (e.g. `[Stale tool result: read file 'main.go' successfully (file content elided for historical compaction)]`).
-- Other unrecognized tools and large user/assistant text blocks are deeply middle-elided down to tiny 100-byte placeholders.
-- This preserves the high-level trajectory memory and alternation structure of the entire session at near-zero token cost, keeping prompt size virtually flat over hundreds of turns.
-- **Toggle:** `export GW_DEEP_COMPACT=on` (defaults to `off`)
-- **Parameters:**
-  - `GW_DEEP_COMPACT_KEEP_TURNS` (default: `12`): Number of recent turns to preserve in full uncompacted detail.
-  - `GW_DEEP_COMPACT_MAX_BYTES` (default: `500`): Byte threshold above which cold turn parts are compacted.
-  - `GW_DEEP_COMPACT_HEAD_BYTES` (default: `200`): Preserved prefix bytes.
-  - `GW_DEEP_COMPACT_TAIL_BYTES` (default: `100`): Preserved suffix bytes.
-
-### Dynamic Sliding-Window Active Tool Pruning (`active_tool_pruning`)
-Cline and other agent clients constantly advertise large lists of available tools (schemas) inside the request options on *every single turn*.
-- **Active Tool Pruning (Strategy C):** Scans the history to see which tools have been executed.
-- If an auxiliary, non-essential tool (e.g. `web_search`) has been called in the past but has gone "cold" (not called in the last `GW_ACTIVE_TOOL_PRUNING_WINDOW` turns), the gateway dynamically strips it from the allowed toolset (`opts.Tools`) on the active turn.
-- **Self-Tuning Safety:** If a tool has *never* been called, it is kept active so the agent can invoke it for the first time whenever it wants. Essential core tools (configured via whitelist) are never pruned. This safely shaves off thousands of prompt tokens on long sessions.
-- **Telemetry & Logging:** When tools are pruned, an `INFO` log detailing evaluated and selected tools (e.g., `Evaluated Tools: [a,b,c], Selected for Pruning: [b]`) is emitted for easy auditing. A `DEBUG` log tracks the exact bytes saved (calculated via JSON-marshaled size estimation), and propagates these savings to Prometheus under the metric key `cline_vertex_gw_compression_bytes_saved_total{stage="active_tool_pruning"}`.
-- **Toggle:** `export GW_ACTIVE_TOOL_PRUNING=on` (defaults to `off`)
-- **Parameters:**
-  - `GW_ACTIVE_TOOL_PRUNING_WINDOW` (default: `20`): Active turns window for checking recent tool calls.
-  - `GW_ACTIVE_TOOL_PRUNING_WHITELIST` (default: `"write_to_file,replace_in_file,execute_command,read_file,ask_followup_question,attempt_completion,new_task"`): Comma-separated list of whitelisted tool names that are immune to pruning (defaults to the absolute critical core system tools of Cline to maximize pruning utility while keeping human interaction and code-writing fully secure).
-
-### Sliding Context Trimming (`trim`)
-Enforces strict sliding-window caps based on character counts to prevent requests from exceeding your model's maximum context bounds. Older turns are gracefully removed from the conversation tail as newer turns are introduced.
+In a standard benchmark conversation (such as a 5-turn Cline session with repetitive 3 KB code pasting and 3 KB system environment blocks on every user turn), this pipeline produces an end-to-end **64% input byte-count reduction** on top of Google/Anthropic's native prompt caching.
 
 ---
 
-## 2. Optimization Presets & Profiles
+## The Optimization Pipeline Flow
 
-The gateway offers **5 progressive profiles** ranging from raw, unoptimized pass-through to maximum context squeeze. The **Default Profile (Profile 3)** sits right in the middle of the spectrum and requires no environment variables to be set.
+The optimization stages run sequentially on inbound client messages before they are translated and dispatched to the upstream publishers.
 
-### Summary Matrix
-
-| Preset / Profile | Loop Traps & Nudge | Env Block Collapse | Tool Truncation | Deep Compaction | Active Tool Pruning | Replay Dedup | Stale Tool Pruning | Substring Dedup | Context Trim |
-|---|---|---|---|---|---|---|---|---|---|
-| **1. Pass-Through (Raw)** | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled | Disabled |
-| **2. Gentle/Conservative** | Active (No Nudge) | $\ge$ 1024 B | Disabled | Disabled | Disabled | $\ge$ 1024 B | Disabled | Disabled | Disabled |
-| **3. Balanced (DEFAULT)** | Active + Nudge | $\ge$ 256 B | Active (8k limit) | Disabled | Disabled | $\ge$ 512 B | Disabled | Disabled | Disabled |
-| **4. Aggressive** | Active + Nudge | $\ge$ 128 B | Active (4k limit) | Active ($\ge$ 12 turns) | Active (`window=20`) | $\ge$ 256 B | Enabled | Active ($\ge$ 512 B) | Soft limit |
-| **5. Extreme Squeeze** | Active + Nudge | $\ge$ 64 B | Active (2k limit) | Active ($\ge$ 8 turns) | Active (`window=10`) | $\ge$ 128 B | Enabled | Active ($\ge$ 256 B) | Strict limit + Hard Output Caps |
+```mermaid
+flowchart TD
+    Inbound[Client Inbound Message] --> Stage1[1. Whitespace Normalization]
+    Stage1 --> Stage2[2. Cache Aligner]
+    Stage2 --> Stage3[3. Env-Block Collapse]
+    Stage3 --> Stage4[4. Tool-Result Truncation CCR]
+    Stage4 --> Stage5[5. Deep Compaction CCR]
+    Stage5 --> Stage6[6. Image & Text Dedup]
+    Stage6 --> Stage7[7. Active Tool Pruning]
+    Stage7 --> Outbound[Vertex AI Dispatch]
+```
 
 ---
 
-### Detailed Profile Descriptions
+## Pipeline Stages Detail
 
-#### 1. Pass-Through (Raw History)
-- **Ideal for:** Debugging or zero-modification use cases. Disables all compressors; full, raw history is passed directly to Vertex.
-- **Activation:**
-  ```bash
-  export GW_NORMALIZE_WHITESPACE=off
-  export GW_COLLAPSE_ENV_BLOCKS=off
-  export GW_DEDUP_REPLAY=off
-  export GW_PRUNE_STALE_TOOLS=off
-  export GW_MAX_INPUT_CHARS=0
-  ```
+### 1. Whitespace Normalization (`normalize`)
+Reduces redundant whitespace, double carriage returns, and trailing empty lines from system or user messages. Compresses raw text sizes by up to 5-10% without affecting code syntax or instruction meaning.
+- **Config Knob:** `GW_NORMALIZE_WHITESPACE` (default: `on`)
 
-#### 2. Gentle / Conservative
-- **Ideal for:** Heavy code refactoring where you want absolutely zero risk of losing older environment details or minor tool outputs.
-- **Activation:**
-  ```bash
-  export GW_COLLAPSE_ENV_THRESHOLD=1024
-  export GW_DEDUP_THRESHOLD=1024
-  export GW_TOOL_TRUNCATE_LIMIT=0
-  export GW_PRUNE_STALE_TOOLS=off
-  ```
+### 2. Prefix Cache Stabilization (CacheAligner)
+Standard cloud LLM providers (like Anthropic Claude and Gemini) use **prefix-based prompt caching** (KV cache). If even a single character changes at the beginning of the prompt prefix, the entire downstream prompt cache is invalidated, causing full price charging and high processing latency.
+- **Action:** This stage automatically parses your system prompt, isolates volatile runtime elements (e.g. `Current Date & Time: ...`, `Working Directory: ...`, session or request UUIDs), and relocates them to a dedicated section at the **very end of the system prompt (the suffix)**.
+- **The Result:** The massive base of the prompt prefix (containing static tool schemas and system instructions) remains **100% identical and stable**, guaranteeing up to **90% prompt-cache hit rates** on Claude and Gemini.
+- **Config Knob:** `GW_CACHE_ALIGNER` (default: `on`)
 
-#### 3. Balanced (Default Config)
-- **Ideal for:** General software engineering tasks. Balanced defaults are active out-of-the-box with **zero environment variables** required.
-- **Key Settings:** Whitespace clean-up is active; environment blocks collapse at 256 B; images/assets deduplicate at 512 B; tool results truncate at 8 KB.
+### 3. Environment Block Collapse (`envblocks`)
+Development agents frequently paste in massive blocks of system environments (like environment variables or directory paths) to assess workspace states.
+- **Action:** If an environment text block exceeds a configured byte threshold, the stage collapses it into a compact, standardized summary placeholder. It exempts the **latest user turn** from this collapse to ensure the model always sees the current workspace state.
+- **Config Knobs:** `GW_COLLAPSE_ENV_BLOCKS` (default: `on`), `GW_COLLAPSE_ENV_MIN_BYTES` (default: `256`)
 
-#### 4. Aggressive Squeeze
-- **Ideal for:** Rapid prototyping or exploratory chat where context costs dominate your workflow. Enables deep compaction for turns older than 12 turns and active tool pruning.
-- **Activation:**
-  ```bash
-  export GW_COLLAPSE_ENV_THRESHOLD=128
-  export GW_DEDUP_THRESHOLD=256
-  export GW_DEDUP_SUBSTRING=on
-  export GW_DEDUP_SUBSTRING_THRESHOLD=512
-  export GW_TOOL_TRUNCATE_LIMIT=4096
-  export GW_PRUNE_STALE_TOOLS=on
-  export GW_DEEP_COMPACT=on
-  export GW_DEEP_COMPACT_KEEP_TURNS=12
-  export GW_ACTIVE_TOOL_PRUNING=on
-  export GW_ACTIVE_TOOL_PRUNING_WINDOW=20
-  ```
+### 4. Lossless Compress-Cache-Retrieve (CCR) Loops
+Traditional token context managers use "destructive" truncation—permanently pruning old conversation turns and terminal outputs when context thresholds are breached, which causes the model to "forget" details from early turns.
 
-#### 5. Extreme Squeeze (Maximum Cost Reduction)
-- **Ideal for:** Massively long agent loops running on lightweight models where you need to squeeze every token. Enables highly aggressive deep compaction for turns older than 8 turns and strict tool pruning.
-- **Activation:**
-  ```bash
-  export GW_COLLAPSE_ENV_THRESHOLD=64
-  export GW_DEDUP_THRESHOLD=128
-  export GW_DEDUP_SUBSTRING=on
-  export GW_DEDUP_SUBSTRING_THRESHOLD=256
-  export GW_TOOL_TRUNCATE_LIMIT=2048
-  export GW_PRUNE_STALE_TOOLS=on
-  export GW_DEEP_COMPACT=on
-  export GW_DEEP_COMPACT_KEEP_TURNS=8
-  export GW_DEEP_COMPACT_MAX_BYTES=250
-  export GW_DEEP_COMPACT_HEAD_BYTES=100
-  export GW_DEEP_COMPACT_TAIL_BYTES=50
-  export GW_ACTIVE_TOOL_PRUNING=on
-  export GW_ACTIVE_TOOL_PRUNING_WINDOW=10
-  export GW_ACTIVE_TOOL_PRUNING_WHITELIST="write_to_file,replace_in_file,execute_command"
-  export GW_MAX_INPUT_CHARS=350000          # strict context tail trimming
-  export GW_MAX_OUTPUT_TOKENS_HARD=4096     # strict generation limits
-  ```
+`cline-vertex-gw` overhauls this with **lossless Compress-Cache-Retrieve (CCR) loops**:
+- **Truncation:** If a tool execution result (such as a massive compiler dump or a read file output) exceeds the configured limit, it is elided. A high-density placeholder is substituted carrying a unique cryptographic SHA-256 lookup hash.
+- **Local Cache:** The complete raw text of the elided tool result is saved in a fast file-based local storage cache (`FSCache`).
+- **Dynamic Retrieval Tool:** The gateway dynamically injects a local-only tool named `retrieve_elided_content` into the model's active tool schema.
+- **Local Interception:** If the model needs to inspect the truncated file, it calls the `retrieve_elided_content` tool. The gateway intercepts this call locally inside its streaming loops, reads the file from `FSCache`, and returns it directly **without network roundtrips to Vertex AI**.
+
+```
+[Massive Tool Output] ──► [Elided Placeholder with SHA-256 Hash] ──► [Save in FSCache]
+                                                                        │
+[Model wants full file] ◄── [Intercepts retrieve_elided_content] ◄──────┘
+```
+
+- **Config Knobs:**
+  - **Tool Truncation:** `GW_TOOL_RESULT_TRUNCATE` (default: `on`), `GW_TOOL_RESULT_MAX_BYTES` (default: `8000`)
+  - **History Compaction:** `GW_DEEP_COMPACT` (default: `off`), `GW_DEEP_COMPACT_KEEP_TURNS` (default: `12`)
+
+### 5. Image & Text Deduplication (`dedup`)
+- **Image Dedup:** Development agents take screenshots on every turn. Sending identical images repeatedly causes massive context bloat. The gateway hashes images; trailing duplicate image inputs are replaced with lightweight textual references pointing to the past turn where the image was first introduced.
+- **Text Substring Dedup:** Compares overlapping substrings in the conversation history and deduplicates redundant file pastes.
+- **Config Knobs:** `GW_DEDUP_REPLAY` (default: `on`), `GW_DEDUP_SUBSTRING` (default: `off`)
+
+### 6. Active Tool Pruning (`active_tool_pruning`)
+As agent backends grow, they register dozens of complex schemas. Loading these schemas on every turn wastes active token space.
+- **Action:** Keeps track of recent conversation logs and dynamically disables unused tool definitions from the model's active schema catalog, keeping the prompt footprint small.
+- **Config Knobs:** `GW_ACTIVE_TOOL_PRUNING` (default: `off`), `GW_ACTIVE_TOOL_PRUNING_WINDOW` (default: `20`)
+
+### 7. Runaway Loop Interception (`loopbreak`)
+Protects against automated billing disasters if an agent enters an infinite recursive execution loop:
+- **Action:** A sliding substring loop detector monitors streaming tokens with **zero heap allocations** on the hot streaming path.
+- **Termination:** If an infinite repetition sequence is detected, the gateway cancels the upstream context immediately, truncates the stream, and emits a clean termination `finish_reason: length`.
+- **Config Knobs:** `GW_BREAK_LOOP_TRAP` (default: `on`), `GW_LOOP_TRAP_NUDGE` (default: `on`)

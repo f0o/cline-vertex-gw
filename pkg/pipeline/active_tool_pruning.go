@@ -15,11 +15,6 @@ var logPruneActive = logx.Scoped("active_tool_pruning")
 
 // Configuration for Dynamic Active Tool Pruning.
 // Default Whitelist includes only the absolute critical core system tools of Cline to maximize pruning utility.
-var (
-	activeToolPruningEnabled   = envBool("GW_ACTIVE_TOOL_PRUNING", false)
-	activeToolPruningWindow    = envInt32("GW_ACTIVE_TOOL_PRUNING_WINDOW", 20)
-	activeToolPruningWhitelist = envString("GW_ACTIVE_TOOL_PRUNING_WHITELIST", "write_to_file,replace_in_file,execute_command,read_file,ask_followup_question,attempt_completion,new_task")
-)
 
 // PruneActiveTools dynamically filters opts.Tools on the active turn.
 // If enabled, it scans the history to see which tools have been called.

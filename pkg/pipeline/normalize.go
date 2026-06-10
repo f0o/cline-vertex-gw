@@ -28,7 +28,6 @@ var logNormalize = logx.Scoped("normalize")
 //     in Cline workloads.
 //
 // Set to any of {0,false,off,no} to disable.
-var normalizeWhitespace = envBool("GW_NORMALIZE_WHITESPACE", true)
 
 // NormalizeWhitespace returns a new slice of *genai.Content where each Part's
 // Text has been normalized. Original Contents/Parts are NOT mutated — the

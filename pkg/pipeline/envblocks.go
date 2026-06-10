@@ -35,10 +35,6 @@ var logEnvblocks = logx.Scoped("envblocks")
 //
 // Like the other compressors this runs at the dispatch layer so every
 // publisher benefits without per-adapter edits.
-var (
-	collapseEnvBlocks   = envBool("GW_COLLAPSE_ENV_BLOCKS", true)
-	collapseEnvMinBytes = envInt32("GW_COLLAPSE_ENV_MIN_BYTES", 256)
-)
 
 // envOpenTag / envCloseTag are the literal markers Cline emits. They are
 // matched case-sensitively because Cline's emitter always uses lowercase.

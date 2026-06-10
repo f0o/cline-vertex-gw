@@ -13,13 +13,6 @@ import (
 var logDeepcompact = logx.Scoped("deepcompact")
 
 // Configuration for Deep Compaction.
-var (
-	deepCompactEnabled   = envBool("GW_DEEP_COMPACT", false)
-	deepCompactKeepTurns = envInt32("GW_DEEP_COMPACT_KEEP_TURNS", 12)
-	deepCompactMaxBytes  = envInt32("GW_DEEP_COMPACT_MAX_BYTES", 500)
-	deepCompactHeadBytes = envInt32("GW_DEEP_COMPACT_HEAD_BYTES", 200)
-	deepCompactTailBytes = envInt32("GW_DEEP_COMPACT_TAIL_BYTES", 100)
-)
 
 // DeepCompactHistoricalTurns processes older turns (outside of the active/warm window)
 // and aggressively compresses any large text content or tool outputs (FunctionResponse),

@@ -1,61 +1,113 @@
 # cline-vertex-gw
 
-An Ollama-compatible **and** OpenAI-compatible HTTP gateway in front of Google Cloud Vertex AI.
+Welcome to the official documentation for **`cline-vertex-gw`**!
 
-`cline-vertex-gw` lets any client that speaks either dialect — Ollama (e.g. [Cline](https://cline.bot), `ollama` CLI, `llm`) or OpenAI Chat Completions (LiteLLM, LangChain, official `openai` SDKs, Continue, Cline's "OpenAI Compatible" provider, etc.) — transparently call Vertex-hosted models: Gemini, Gemma, Claude, Llama, Mistral / Mixtral / Codestral, Jamba, Cohere Command R/R+, DeepSeek, Qwen, and Nvidia-hosted MaaS models — without changing the client.
+`cline-vertex-gw` is an ultra-high-performance, production-grade, dual-surface translation proxy that connects Ollama-compatible and OpenAI-compatible clients to Google Cloud Vertex AI. 
 
-```
-                       /api/chat        ┌──────────────────┐   Vertex REST    ┌────────────┐
-┌──────────┐  Ollama   /api/tags        │                  │   rawPredict     │            │
-│  Cline   │ ─────────►/api/generate ──►│                  │ ───────────────► │            │
-└──────────┘                            │ cline-vertex-gw  │   streamGenerate │ Vertex AI  │
-┌──────────┐  OpenAI   /v1/models       │                  │   streamRaw      │            │
-│ LiteLLM  │ ─────────►/v1/chat/        │                  │ ───────────────► │            │
-└──────────┘           completions      └──────────────────┘                  └────────────┘
+Built specifically for high-frequency AI agent developer loops (such as Cline or Continue), the gateway implements an advanced, multi-stage **Token-Cost Optimization Pipeline** to dramatically shrink prompt contexts, maximize KV caching, detect and break LLM execution loops, and save up to **75% in upstream API costs**.
+
+---
+
+## Architectural Topology
+
+The gateway acts as a stateless, low-latency translation proxy. It translates request/response shapes on-the-fly and streams responses dynamically over HTTP with zero added buffer delay.
+
+```mermaid
+flowchart TD
+    subgraph Clients ["Client Layer"]
+        Ollama[Ollama Clients e.g., Cline, Continue]
+        OpenAI[OpenAI Clients e.g., LiteLLM, langchain]
+    end
+
+    subgraph Gateway ["cline-vertex-gw"]
+        Mux[http.ServeMux Router]
+        Middleware[Middleware: Recovery, Auth, Limit]
+        
+        subgraph Handlers ["Dialect Handlers"]
+            OllamaH[Ollama Handlers: /api/chat, /api/tags]
+            OpenAIH[OpenAI Handlers: /v1/chat/completions, /v1/models]
+        end
+
+        subgraph Optimization ["Token-Cost Optimization Pipeline"]
+            Norm[Normalize Whitespace]
+            Align[Cache Aligner]
+            Env[Collapse Env Blocks]
+            Dedup[Image & Text Dedup]
+            Stale[Stale Tool Pruning]
+            DC[Deep Compaction]
+            ATP[Active Tool Pruning]
+        end
+
+        subgraph Engine ["Upstream Routing & Adapters"]
+            Dispatch[Publisher Dispatcher]
+            GoogleSDK[Google GenAI SDK]
+            Anthropic[Anthropic SSE Adapter]
+            Cohere[Cohere REST Adapter]
+            OAIC[OpenAI-Compat MaaS Adapter]
+        end
+    end
+
+    subgraph Vertex ["Google Cloud Vertex AI"]
+        Gemini[Gemini & Gemma Models]
+        Claude[Claude Models]
+        Command[Command R/R+]
+        MaaS[Meta Llama, Mistral, Jamba, DeepSeek, Qwen]
+    end
+
+    %% Client Routing
+    Ollama -->|/api/*| Mux
+    OpenAI -->|/v1/*| Mux
+    Mux --> Middleware
+    Middleware --> OllamaH
+    Middleware --> OpenAIH
+
+    %% Core Pipeline Execution
+    OllamaH & OpenAIH -->|Raw Context| Optimization
+    Optimization -->|Optimized Payload| Dispatch
+
+    %% Upstream Dispatch
+    Dispatch -->|native Go SDK| GoogleSDK --> Vertex
+    Dispatch -->|streamRawPredict| Anthropic --> Vertex
+    Dispatch -->|streamRawPredict| Cohere --> Vertex
+    Dispatch -->|streamRawPredict| OAIC --> Vertex
 ```
 
 ---
 
-## Features
+## Core Pillars & Capabilities
 
-- **Two client dialects, one upstream.** All endpoints share the same Vertex translation pipeline, retry logic, metrics, and auth — pick whichever shape your client prefers.
-- **Ollama surface** (auto-discovery; great for Cline's model picker):
-  - `GET /api/tags` - returns enabled Vertex models formatted as local Ollama tags.
-  - `POST /api/chat` - translates Ollama chat format to Vertex AI, supporting full streaming (NDJSON format).
-  - `POST /api/generate` - single-turn generation support.
-- **OpenAI-compatible surface** (bearer token support; great for LiteLLM, langchain, standard SDKs):
-  - `GET /v1/models` - lists enabled models in standard OpenAI schema.
-  - `POST /v1/chat/completions` - supports system prompts, custom parameters, inline `image_url` parts (vision), and streaming (`text/event-stream`).
-- **Dynamic publisher dispatch.** Calls the correct Vertex REST endpoint for each model family:
-  - Gemini & Gemma: uses Google's standard Generative AI protocol.
-  - Anthropic Claude 3 / 3.5: maps to Vertex's native Anthropic Messages endpoint (`/publishers/anthropic/models/...:streamRawPredict`).
-  - Cohere Command R / R+: maps to Vertex's native Cohere `/chat` endpoint (`/publishers/cohere/models/...:streamRawPredict`).
-  - Llama 3 / 3.1 / 3.2 / 3.3, Mistral / Codestral, Jamba, DeepSeek-R1 / Qwen, and Nvidia MaaS models: routes via Vertex Llama/Mistral/MaaS raw predicts.
-- **Robust Tool Calling / Function Calling.** Integrates complex tool calls on both Ollama and OpenAI surfaces. Translates inbound tool definitions, processes assistant tool calls, and returns formatted tool results seamlessly.
-- **Unified token-cost optimization pipeline.** Employs 5 progressive profiles (from raw Pass-Through to Extreme Squeeze) utilizing:
-  - White-space / comment normalizers.
-  - Redundant environment block collapsing (exempting the latest turn to preserve IDE context).
-  - Multimodal part-level caching and deduplication.
-  - Interactive tool call pruning & tool-result truncation (head/tail preservation).
-  - Sliding context trimming.
-- **Prometheus Metrics & Cost Tracking.** Automatically tracks estimated USD cost, prompt/cache/completion token counts, latencies, compression bytes saved, and cache hit ratios.
-- **Production Hardened.** Full panic recovery, body size limits, configurable connection pools, automatic retries with exponential backoff, and bearer-token authentication.
+### 1. Dual-Dialect Client Gating
+- **Ollama Translation Surface (`/api/*`):** Seamless model discovery (`/api/tags`) and streaming chat completions (`/api/chat`). Acts as a drop-in local replacement for standard Ollama instances.
+- **OpenAI Translation Surface (`/v1/*`):** Exposes `/v1/models` and `/v1/chat/completions` with bearer-token security. Integrates easily with LiteLLM, Continue, and LangChain.
+
+### 2. Intelligent Context Optimization
+The gateway runs a multi-stage, in-flight pipeline to trim input and output tokens before calling Google Cloud Vertex AI:
+- **Prefix Cache Stabilization (CacheAligner):** Relocates volatile strings (e.g. dynamic date/time, working paths, session IDs) from system prompts to system prompt suffixes, stabilizing the static instruction/tool prefix and yielding up to **90% prompt caching hit rates** on Claude/Gemini.
+- **Whitespace & Format Normalization:** Compacts redundant formatting in raw file pasted contents or code blocks.
+- **Lossless Compress-Cache-Retrieve (CCR) Loops:** Substitutes elided terminal outputs with SHA-256 placeholder hashes, caching the raw content locally in `FSCache`. Dynamically injects a local `retrieve_elided_content` tool that lets the model retrieve truncated historical files on-demand without network roundtrips.
+- **Runaway Loop Interception:** Instantly cancels upstream contexts if a model gets stuck in an infinite tool-calling loop, truncating costs.
+
+### 3. Comprehensive Media & Tool Calling Translation
+- **Magic-Bytes Sniffer:** Sniffs base64 streams (PNG, JPEG, GIF, WebP, PDF, WAV, MP3, MP4, etc.) to determine MIME types without client hints.
+- **Robust Tool Translation:** Standardizes dynamic client tool formats to upstream specifications (such as Anthropic Messages, Cohere flattening, and Gemini Function Declarations) and streams back standardized chunks.
+
+### 4. Enterprise-Grade Observability
+- **Prometheus Metrics (`GET /metrics`):** Exports latency histograms, compression bytes saved, and loop-detector trigger states.
+- **Live Billing Catalog Scraper:** Queries GCP's Cloud Billing Catalog API to automatically pull active rates, logging exact estimated USD costs per request in real-time.
 
 ---
 
-## Why Two Client Surfaces?
+## Navigation Guide
 
-Clients in the LLM agent ecosystem usually default to either the Ollama interface or the OpenAI-compatible interface. Having both surfaces in `cline-vertex-gw` provides ultimate flexibility:
+To explore the details of `cline-vertex-gw`, use the following navigation paths:
 
-| Capability | Ollama `/api/*` | OpenAI `/v1/*` |
-|---|---|---|
-| Auto-discovery / Tag listing | ✅ (`/api/tags`) | ✅ (`/v1/models`) |
-| Native Cline model picker support | ✅ | ⚠️ (Requires manually adding custom profiles) |
-| Per-request Bearer token authentication | ❌ (Client-side limitations) | ✅ (Using `Authorization` header) |
-| Multimodal input (Images, Audio, Video, PDF) | ✅ (`images` / magic sniffing) | ✅ (`image_url` / polymorphic `input_audio`) |
-| Streaming `done_reason` / Ollama token counts | ✅ | n/a |
-| Streaming `usage` block on final chunk | n/a | ✅ |
-
-Both share the same upstream code path: routing across publishers, retries, metrics, auth, panic recovery, and body-size limits. Switching dialects is just a client-side config choice.
-
-*Note:* If you only ever call a fixed set of MaaS models (Llama, Mistral, Jamba, DeepSeek, Qwen) you can also point your OpenAI client straight at Vertex's [native OpenAI-compatible endpoint](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/call-vertex-using-openai-library) and skip this gateway entirely. Use this gateway when you want a single endpoint that routes across Gemini + Anthropic + Cohere + MaaS by model id, or when you want Cline's Ollama-style auto-discovery.
+- **[Quick Start](quickstart.md):** Get the gateway compiled, running, and connected to your IDE in 5 minutes.
+- **[Configuration Manual](configuration.md):** Full list of server knobs, optimization profiles (`GW_PROFILE`), and authentication variables.
+  - **[Features]:** Deep technical analyses of the gateway's core systems:
+    - **[Multimodal Support](features/multimodal.md):** Supported MIME types, magic-bytes sniffing, and media deduplication.
+    - **[Tool Calling](features/tool_calling.md):** Translating and stream-assembling function schemas and tool executions.
+    - **[Prometheus Metrics](features/metrics.md):** Metric schemas, hand-rolled telemetry endpoints, and active logger outputs.
+    - **[Cost Estimation](features/cost_estimation.md):** Dynamic price catalog scraping, estimated cost resolution, and routing tiers.
+    - **[Token-Cost Optimization](features/optimization.md):** Concrete overview of the 12+ prompt compaction stages and CCR loops.
+- **[API Reference](api_reference.md):** Fully documented HTTP paths, request payloads, and response structures for Ollama and OpenAI dialects.
+- **[Development Guide](development.md):** Compile binaries, run test blocks with race-detection, and understand the GitHub Actions CI/CD pipelines.
