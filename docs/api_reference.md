@@ -95,9 +95,12 @@ Executes a single-turn raw text generation request.
 
 ---
 
-## 2. OpenAI Dialect (`/v1/*`)
+## 2. OpenAI Dialect (`/v1/*` - Recommended & Superior)
 
-Exposes standard OpenAI-compatible paths. Perfect for LiteLLM, langchain, python/node `openai` SDKs, and IDE extensions like Continue.
+Exposes standard OpenAI-compatible paths. This interface is **architecturally superior** to the Ollama compatibility fallback:
+- **Superior Streaming Tool Calling:** Streams function call arguments token-by-token in real-time, allowing clients to show tool calls dynamically.
+- **Real-Time Stream Usage:** Emits standard usage metric blocks on the final stream chunk for precise billing tracking.
+- **Ecosystem Compatibility:** Plugs natively and robustly into LiteLLM, langchain, standard OpenAI SDKs, Continue, and Cline's OpenAI Compatible provider.
 
 ### `GET /v1/models`
 Lists available models formatted in OpenAI-compatible lists.

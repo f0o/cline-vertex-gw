@@ -3,10 +3,13 @@ package provider
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.f0o.dev/cline-vertex-gw/pkg/cache"
 	"google.golang.org/genai"
 )
 
@@ -222,5 +225,52 @@ func TestSetTagsCacheMetricsNilSafe(t *testing.T) {
 	cacheMissCallback()
 	if got := atomic.LoadInt32(&calls); got != 11 {
 		t.Errorf("callback calls = %d, want 11", got)
+	}
+}
+
+func TestListModelsCached_DiskCacheFallback(t *testing.T) {
+	// Set up isolated temp directory for disk cache.
+	tempDir := t.TempDir()
+	t.Setenv("GW_CACHE_DIR", tempDir)
+	t.Setenv("GW_TAGS_CACHE_TTL_SEC", "60")
+	t.Setenv("GW_FS_CACHE_TTL_SEC", "86400") // 1 day
+
+	// Clear memory cache state to force a miss.
+	InvalidateTagsCache()
+	t.Cleanup(InvalidateTagsCache)
+
+	dummyModels := []*genai.Model{
+		{Name: "publishers/google/models/gemini-dummy-disk"},
+	}
+
+	// 1. Write dummy models to disk cache.
+	if err := cache.WriteFSCache(cache.ModelsCacheFile, dummyModels); err != nil {
+		t.Fatalf("failed to write disk cache: %v", err)
+	}
+
+	vc := &VertexClient{}
+	ctx := context.Background()
+
+	// 2. Call ListModelsCached and verify it retrieves from disk cache.
+	got, err := vc.ListModelsCached(ctx)
+	if err != nil {
+		t.Fatalf("ListModelsCached returned error: %v", err)
+	}
+
+	if len(got) != 1 || got[0].Name != "publishers/google/models/gemini-dummy-disk" {
+		t.Errorf("expected dummy model from disk cache, got: %+v", got)
+	}
+
+	// 3. To verify it seeded the in-memory cache, modify/delete the disk file.
+	// If it seeded the in-memory cache properly, it should still return the model
+	// without failing or reloading from the deleted disk cache.
+	_ = os.Remove(filepath.Join(tempDir, cache.ModelsCacheFile))
+
+	got2, err := vc.ListModelsCached(ctx)
+	if err != nil {
+		t.Fatalf("second call to ListModelsCached failed: %v", err)
+	}
+	if len(got2) != 1 || got2[0].Name != "publishers/google/models/gemini-dummy-disk" {
+		t.Errorf("second call: expected dummy model from memory cache, got: %+v", got2)
 	}
 }

@@ -77,8 +77,11 @@ flowchart TD
 ## Core Pillars & Capabilities
 
 ### 1. Dual-Dialect Client Gating
-- **Ollama Translation Surface (`/api/*`):** Seamless model discovery (`/api/tags`) and streaming chat completions (`/api/chat`). Acts as a drop-in local replacement for standard Ollama instances.
-- **OpenAI Translation Surface (`/v1/*`):** Exposes `/v1/models` and `/v1/chat/completions` with bearer-token security. Integrates easily with LiteLLM, Continue, and LangChain.
+- **OpenAI Translation Surface (`/v1/*` - Highly Recommended):** The primary and most feature-rich translation layer. Exposes `/v1/models` and `/v1/chat/completions` with standardized bearer-token security. This shim is **architecturally superior** to the Ollama endpoint:
+  - **Superior Streaming Tool Calling:** Streams function call arguments token-by-token in real-time, allowing clients to show tool calls dynamically.
+  - **Real-Time Stream Usage:** Emits standard usage metric blocks on the final stream chunk for precise billing tracking.
+  - **Ecosystem Compatibility:** Plugs natively and robustly into LiteLLM, langchain, standard OpenAI SDKs, Continue, and Cline's OpenAI Compatible provider.
+- **Ollama Translation Surface (`/api/*` - Compatibility Fallback):** Seamless model discovery (`/api/tags`) and streaming chat completions (`/api/chat`). Maintained for backward compatibility as a drop-in replacement for standard local Ollama instances (tool calls are assembled fully and emitted on the final `Done` frame).
 
 ### 2. Intelligent Context Optimization
 The gateway runs a multi-stage, in-flight pipeline to trim input and output tokens before calling Google Cloud Vertex AI:

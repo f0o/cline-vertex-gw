@@ -79,8 +79,11 @@ flowchart TD
 ## Key Features
 
 ### 1. Dual-Dialect Translation Surface
-- **Ollama Dialect (`/api/*`):** Exposes full model auto-discovery (`/api/tags`), streaming chat completions (`/api/chat`), and raw generations (`/api/generate`). Allows the gateway to act as a drop-in local Ollama replacement.
-- **OpenAI Dialect (`/v1/*`):** Exposes `/v1/models` and `/v1/chat/completions` with bearer-token authentication. Highly compatible with LiteLLM, LangChain, and standard OpenAI SDKs.
+- **OpenAI Dialect (`/v1/*` - Highly Recommended):** The primary and most feature-rich translation layer. Exposes `/v1/models` and `/v1/chat/completions` with bearer-token authentication. This shim is **architecturally superior** to the Ollama endpoint:
+  - **Superior Streaming Tool Calling:** Streams function call arguments token-by-token in real-time, allowing clients to show tool calls dynamically.
+  - **Real-Time Stream Usage:** Emits standard usage metric blocks on the final stream chunk for precise billing tracking.
+  - **Ecosystem Compatibility:** Plugs natively and robustly into LiteLLM, langchain, standard OpenAI SDKs, Continue, and Cline's OpenAI Compatible provider.
+- **Ollama Dialect (`/api/*` - Compatibility Fallback):** Seamless model discovery (`/api/tags`) and streaming chat completions (`/api/chat`). Maintained for backward compatibility as a drop-in replacement for standard local Ollama instances (tool calls are assembled fully and emitted on the final `Done` frame).
 
 ### 2. Multi-Stage Token-Cost Optimization
 The gateway executes a sequential, 12+ stage prompt optimization pipeline prior to upstream dispatch:

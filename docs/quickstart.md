@@ -126,20 +126,50 @@ curl -i http://127.0.0.1:11434/v1/chat/completions \
 
 ## 3. Connecting Clients
 
+To ensure the most robust, high-performance experience with real-time stream metrics and delta-by-delta streaming tool-calling outputs, it is **strongly recommended** to connect your clients utilizing the **OpenAI-Compatible** provider configuration over the Ollama compatibility fallback.
+
 ### Connecting VS Code Cline
 
-Cline is designed to interact natively with Ollama. Connecting Cline to your Vertex AI-backed gateway is straightforward:
+#### Method A: OpenAI Compatible Provider (Recommended & Superior)
+Using the OpenAI compatible provider unlocks real-time tool calling streaming and detailed usage metrics inside Cline.
+
+1. Open Cline's settings pane inside VS Code.
+2. Select **OpenAI Compatible** as the API Provider.
+3. Set the **Base URL** field to: `http://localhost:11434/v1`
+4. Enter any non-empty string as the **API Key** (if you have configured `GATEWAY_AUTH_TOKEN` on the gateway, enter the exact token value here).
+5. Set your desired **Model ID** (e.g. `claude-3-5-sonnet`, `gemini-2.0-flash`, etc.).
+6. Enter custom model details, or click save. Enjoy lightning-fast, real-time tool stream updates!
+
+#### Method B: Ollama Provider (Compatibility Fallback)
+Maintained as a drop-in local discovery option:
 
 1. Open Cline's settings in VS Code.
 2. Select **Ollama** as the API Provider.
 3. In the **Ollama Base URL** field, enter: `http://localhost:11434`
-4. The **Model** picker will automatically populate with all available models (Gemini, Claude, Llama, Mistral, etc.) discovered from Vertex AI! Select your desired model (e.g., `claude-3-5-sonnet` or `gemini-2.5-pro`).
-5. (Optional) If you configured a bearer token on the gateway (`GATEWAY_AUTH_TOKEN`), set it in the client configuration or use the OpenAI-compatible provider instead.
+4. The **Model** picker will automatically populate with all available models (Gemini, Claude, Llama, Mistral, etc.) discovered from Vertex AI! Select your desired model.
+
+---
 
 ### Connecting Continue
 
-To configure Continue (`config.json`) to use the gateway's Ollama dialect:
+To configure Continue (`config.json`), we recommend using the OpenAI provider setup to guarantee optimal tool usage and metrics handling:
 
+#### Recommended Configuration (OpenAI Provider):
+```json
+{
+  "models": [
+    {
+      "title": "Claude 3.5 Sonnet (Vertex)",
+      "provider": "openai",
+      "model": "claude-3-5-sonnet",
+      "apiBase": "http://localhost:11434/v1",
+      "apiKey": "placeholder"
+    }
+  ]
+}
+```
+
+#### Fallback Configuration (Ollama Provider):
 ```json
 {
   "models": [

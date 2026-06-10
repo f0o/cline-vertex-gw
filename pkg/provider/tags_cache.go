@@ -100,7 +100,18 @@ func (vc *VertexClient) ListModelsCached(ctx context.Context) ([]*genai.Model, e
 	}
 	tagsCache.mu.Unlock()
 
-	// Cache miss or expired. Fetch outside the lock so concurrent callers on
+	// Cache miss or expired. Try the on-disk cache first before fanning out
+	// to the live discovery / scraper API.
+	var cached []*genai.Model
+	if fresh, err := cache.ReadFSCache(cache.ModelsCacheFile, &cached); err == nil && fresh && len(cached) > 0 {
+		tagsCache.mu.Lock()
+		tagsCache.entry = &tagsCacheEntry{models: cached, at: time.Now()}
+		tagsCache.mu.Unlock()
+		logTags.Info("loaded models from on-disk cache on in-memory cache miss", "count", len(cached), "source", "fs-cache-fresh")
+		return cached, nil
+	}
+
+	// Disk cache missed, is stale, or failed. Fetch outside the lock so concurrent callers on
 	// a miss don't all block on a single in-flight discovery, but accept the
 	// small risk of duplicate work the first time after expiry (the worst
 	// case is a few extra Vertex calls during the brief window, then the
