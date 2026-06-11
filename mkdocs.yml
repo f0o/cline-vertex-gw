@@ -56,17 +56,22 @@ nav:
       - Multimodal Inputs: features/multimodal.md
       - Native Tool Calling: features/tool_calling.md
       - Real-Time Billing & Metrics: features/cost_metrics.md
+      - Model Context Protocol (MCP): features/mcp_server.md
+      - Swarm Shared Context Memory: features/swarm_memory.md
   - Optimization Pipeline:
       - Pipeline Overview: optimization/overview.md
       - 0. Loop Break Trap: optimization/loopbreak.md
       - 0a. Active Tool Pruning: optimization/active_tool_pruning.md
       - 0b. Prune Stale Tools: optimization/prune_tools.md
+      - 0c. Self-Healed Learning Loop: optimization/learning_loop.md
       - 1a. Normalize Whitespace: optimization/normalize.md
       - 1b. Cache Aligner: optimization/cache_aligner.md
       - 2. Collapse Env Blocks: optimization/envblocks.md
       - 2b. Tool Result Truncation: optimization/toolresult.md
       - 2b1. Write Action Elision: optimization/write_elision.md
+      - 2b2. Smart JSON/Log Crusher: optimization/smart_crusher.md
       - 2c. Deep Compaction: optimization/deepcompact.md
+      - 2c1. Syntactic Code Compressor: optimization/syntax_compressor.md
       - 3. Context Budget Trim: optimization/budget.md
       - 4. Duplicate Block Dedup: optimization/dedup.md
       - 4b. Substring Block Dedup: optimization/dedup_substring.md

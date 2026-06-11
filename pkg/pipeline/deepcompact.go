@@ -147,7 +147,11 @@ func deepCompactFunctionResponse(p *genai.Part) (*genai.Part, int) {
 		for _, k := range toolResultTextKeys {
 			if _, ok := fr.Response[k]; ok {
 				if origStr, ok := fr.Response[k].(string); ok {
-					hash := SaveToElidedCache(origStr)
+					hash, err := SaveToElidedCache(origStr)
+					if err != nil {
+						logDeepcompact.Errorf("failed to save deep compact content to cache; skipping: %v", err)
+						continue
+					}
 					summaryWithHash := strings.TrimSuffix(semanticSummary, "]") + ". Retrieve full content: hash=" + hash + "]"
 					saved += len(origStr) - len(summaryWithHash)
 					newResp[k] = summaryWithHash
@@ -192,6 +196,13 @@ func deepCompactFunctionResponse(p *genai.Part) (*genai.Part, int) {
 
 // deepMiddleElide middle-elides a string using smaller cold-turn bounds.
 func deepMiddleElide(s string) (string, int) {
+	// Try syntax-aware code block compression first if the text contains code blocks!
+	if strings.Contains(s, "```") {
+		if crushed, saved := CompressCodeBlocks(s); saved > 0 {
+			return crushed, saved
+		}
+	}
+
 	head := int(deepCompactHeadBytes)
 	tail := int(deepCompactTailBytes)
 	if head < 0 {
@@ -212,7 +223,11 @@ func deepMiddleElide(s string) (string, int) {
 	}
 
 	elided := tailStart - headEnd
-	hash := SaveToElidedCache(s)
+	hash, err := SaveToElidedCache(s)
+	if err != nil {
+		logDeepcompact.Errorf("failed to save deep elided text content to cache; skipping compaction: %v", err)
+		return s, 0
+	}
 	marker := fmt.Sprintf("\n\n… %d bytes elided (stale history deeply compacted). Retrieve full content: hash=%s …\n\n", elided, hash)
 	if elided <= len(marker) {
 		return s, 0

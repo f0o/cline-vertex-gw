@@ -125,6 +125,7 @@ func (h *APIHandler) runStreamWithRetry(
 						// content_block_stop; Cohere emits on
 						// tool-calls-generation). Forward as-is.
 						if part.FunctionCall != nil {
+							pipeline.RestoreOutboundToolCallPlaceholders(part)
 							if cberr := onChunk(StreamDelta{Part: part}); cberr != nil {
 								cancel()
 								metrics.end = time.Now()
@@ -167,8 +168,8 @@ func (h *APIHandler) runStreamWithRetry(
 						retrievalsCount++
 						var rawContent string
 						fileName := "elided_" + hash + ".json"
-						fresh, err := cache.ReadFSCache(fileName, &rawContent)
-						if err != nil || !fresh || rawContent == "" {
+						_, err := cache.ReadFSCache(fileName, &rawContent)
+						if err != nil || rawContent == "" {
 							rawContent = "[Error: cached content expired or unavailable]"
 						}
 						callID := retrievalCall.ID
@@ -262,6 +263,13 @@ func (h *APIHandler) runNonStreamWithRetry(
 
 		resp, err := h.Vertex.Generate(ctx, model, system, contents, opts)
 		if err == nil {
+			// Restore outbound placeholders before checking/delivering
+			if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+				for _, part := range resp.Candidates[0].Content.Parts {
+					pipeline.RestoreOutboundToolCallPlaceholders(part)
+				}
+			}
+
 			// Check if we need to resolve a retrieval tool call
 			if resolved, newContents := resolveRetrievalToolCall(contents, resp.Candidates); resolved {
 				if retrievalsCount < 5 {
@@ -458,8 +466,8 @@ func resolveRetrievalToolCall(contents []*genai.Content, candidates []*genai.Can
 	// Read content from filesystem cache
 	var rawContent string
 	fileName := "elided_" + hash + ".json"
-	fresh, err := cache.ReadFSCache(fileName, &rawContent)
-	if err != nil || !fresh || rawContent == "" {
+	_, err := cache.ReadFSCache(fileName, &rawContent)
+	if err != nil || rawContent == "" {
 		rawContent = "[Error: cached content expired or unavailable]"
 	}
 

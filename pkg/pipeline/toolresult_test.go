@@ -12,8 +12,11 @@ func withToolResult(t *testing.T, enabled bool, max, head, tail int32) func() {
 	t.Helper()
 	pe, pm, ph, pt, pr := toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow
 	toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = enabled, max, head, tail, 1
+	prevSC := smartCrusherEnabled
+	smartCrusherEnabled = false
 	return func() {
 		toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = pe, pm, ph, pt, pr
+		smartCrusherEnabled = prevSC
 	}
 }
 
@@ -113,8 +116,11 @@ func withProgressiveToolResult(t *testing.T, enabled bool, max, head, tail, reta
 	t.Helper()
 	pe, pm, ph, pt, pr := toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow
 	toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = enabled, max, head, tail, retainWindow
+	prevSC := smartCrusherEnabled
+	smartCrusherEnabled = false
 	return func() {
 		toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = pe, pm, ph, pt, pr
+		smartCrusherEnabled = prevSC
 	}
 }
 

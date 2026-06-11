@@ -42,6 +42,15 @@ func TestProfileBaselines(t *testing.T) {
 				if activeToolPruningEnabled {
 					t.Error("want activeToolPruningEnabled false")
 				}
+				if smartCrusherEnabled {
+					t.Error("want smartCrusherEnabled false")
+				}
+				if syntaxCompressorEnabled {
+					t.Error("want syntaxCompressorEnabled false")
+				}
+				if learningLoopEnabled {
+					t.Error("want learningLoopEnabled false")
+				}
 			},
 		},
 		{
@@ -77,6 +86,15 @@ func TestProfileBaselines(t *testing.T) {
 				}
 				if toolResultTruncate {
 					t.Error("want toolResultTruncate false")
+				}
+				if smartCrusherEnabled {
+					t.Error("want smartCrusherEnabled false")
+				}
+				if syntaxCompressorEnabled {
+					t.Error("want syntaxCompressorEnabled false")
+				}
+				if learningLoopEnabled {
+					t.Error("want learningLoopEnabled false")
 				}
 			},
 		},
@@ -125,6 +143,15 @@ func TestProfileBaselines(t *testing.T) {
 				}
 				if activeToolPruningEnabled {
 					t.Error("want activeToolPruningEnabled false")
+				}
+				if !smartCrusherEnabled {
+					t.Error("want smartCrusherEnabled true")
+				}
+				if syntaxCompressorEnabled {
+					t.Error("want syntaxCompressorEnabled false")
+				}
+				if learningLoopEnabled {
+					t.Error("want learningLoopEnabled false")
 				}
 			},
 		},
@@ -188,6 +215,15 @@ func TestProfileBaselines(t *testing.T) {
 				}
 				if activeToolPruningWindow != 20 {
 					t.Errorf("want activeToolPruningWindow 20, got %d", activeToolPruningWindow)
+				}
+				if !smartCrusherEnabled {
+					t.Error("want smartCrusherEnabled true")
+				}
+				if !syntaxCompressorEnabled {
+					t.Error("want syntaxCompressorEnabled true")
+				}
+				if learningLoopEnabled {
+					t.Error("want learningLoopEnabled false")
 				}
 			},
 		},
@@ -258,6 +294,15 @@ func TestProfileBaselines(t *testing.T) {
 				if maxInputChars != 350000 {
 					t.Errorf("want maxInputChars 350000, got %d", maxInputChars)
 				}
+				if !smartCrusherEnabled {
+					t.Error("want smartCrusherEnabled true")
+				}
+				if !syntaxCompressorEnabled {
+					t.Error("want syntaxCompressorEnabled true")
+				}
+				if !learningLoopEnabled {
+					t.Error("want learningLoopEnabled true")
+				}
 			},
 		},
 	}
@@ -275,6 +320,9 @@ func TestProfileBaselines(t *testing.T) {
 	origDedupSubThreshold := os.Getenv("GW_DEDUP_SUBSTRING_THRESHOLD")
 	origToolMax := os.Getenv("GW_TOOL_RESULT_MAX_BYTES")
 	origToolLimit := os.Getenv("GW_TOOL_TRUNCATE_LIMIT")
+	origSmartCrusher := os.Getenv("GW_SMART_CRUSHER")
+	origSyntax := os.Getenv("GW_SYNTAX_COMPRESSOR")
+	origLearning := os.Getenv("GW_LEARNING_LOOP")
 
 	defer func() {
 		os.Setenv("GW_PROFILE", origProfile)
@@ -289,6 +337,9 @@ func TestProfileBaselines(t *testing.T) {
 		os.Setenv("GW_DEDUP_SUBSTRING_THRESHOLD", origDedupSubThreshold)
 		os.Setenv("GW_TOOL_RESULT_MAX_BYTES", origToolMax)
 		os.Setenv("GW_TOOL_TRUNCATE_LIMIT", origToolLimit)
+		os.Setenv("GW_SMART_CRUSHER", origSmartCrusher)
+		os.Setenv("GW_SYNTAX_COMPRESSOR", origSyntax)
+		os.Setenv("GW_LEARNING_LOOP", origLearning)
 		LoadConfig() // Restore original config state
 	}()
 
@@ -306,6 +357,9 @@ func TestProfileBaselines(t *testing.T) {
 			os.Unsetenv("GW_DEDUP_SUBSTRING_THRESHOLD")
 			os.Unsetenv("GW_TOOL_RESULT_MAX_BYTES")
 			os.Unsetenv("GW_TOOL_TRUNCATE_LIMIT")
+			os.Unsetenv("GW_SMART_CRUSHER")
+			os.Unsetenv("GW_SYNTAX_COMPRESSOR")
+			os.Unsetenv("GW_LEARNING_LOOP")
 
 			os.Setenv("GW_PROFILE", tc.profile)
 			LoadConfig()
@@ -325,6 +379,9 @@ func TestProfileOverridesAndFallbacks(t *testing.T) {
 	origDedupThreshold := os.Getenv("GW_DEDUP_THRESHOLD")
 	origDedupSubThreshold := os.Getenv("GW_DEDUP_SUBSTRING_THRESHOLD")
 	origToolLimit := os.Getenv("GW_TOOL_TRUNCATE_LIMIT")
+	origSmartCrusher := os.Getenv("GW_SMART_CRUSHER")
+	origSyntax := os.Getenv("GW_SYNTAX_COMPRESSOR")
+	origLearning := os.Getenv("GW_LEARNING_LOOP")
 
 	defer func() {
 		os.Setenv("GW_PROFILE", origProfile)
@@ -333,12 +390,18 @@ func TestProfileOverridesAndFallbacks(t *testing.T) {
 		os.Setenv("GW_DEDUP_THRESHOLD", origDedupThreshold)
 		os.Setenv("GW_DEDUP_SUBSTRING_THRESHOLD", origDedupSubThreshold)
 		os.Setenv("GW_TOOL_TRUNCATE_LIMIT", origToolLimit)
+		os.Setenv("GW_SMART_CRUSHER", origSmartCrusher)
+		os.Setenv("GW_SYNTAX_COMPRESSOR", origSyntax)
+		os.Setenv("GW_LEARNING_LOOP", origLearning)
 		LoadConfig()
 	}()
 
 	// 1. Setup profile = 4 (Aggressive) but override normalizeWhitespace to false
 	os.Setenv("GW_PROFILE", "aggressive")
 	os.Setenv("GW_NORMALIZE_WHITESPACE", "false")
+	os.Setenv("GW_SMART_CRUSHER", "false")
+	os.Setenv("GW_SYNTAX_COMPRESSOR", "false")
+	os.Setenv("GW_LEARNING_LOOP", "false")
 	LoadConfig()
 
 	if normalizeWhitespace {
@@ -346,6 +409,15 @@ func TestProfileOverridesAndFallbacks(t *testing.T) {
 	}
 	if !deepCompactEnabled {
 		t.Error("want deepCompactEnabled true from Aggressive baseline")
+	}
+	if smartCrusherEnabled {
+		t.Error("want smartCrusherEnabled overridden to false")
+	}
+	if syntaxCompressorEnabled {
+		t.Error("want syntaxCompressorEnabled overridden to false")
+	}
+	if learningLoopEnabled {
+		t.Error("want learningLoopEnabled overridden to false")
 	}
 
 	// 2. Setup profile = 3 (Balanced) but test fallback aliases

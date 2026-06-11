@@ -181,6 +181,7 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 
 	// 6. Inject the dynamic retrieve_elided_content tool if any elided hashes exist in context.
 	InjectRetrieveElidedContentTool(contents, opts)
+	systemPrompt = InjectElisionPromptHint(systemPrompt, contents)
 
 	finalMsgBytes := 0
 	for _, c := range contents {

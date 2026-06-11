@@ -99,7 +99,12 @@ func ElideHistoricalWriteActions(contents []*genai.Content) []*genai.Content {
 			}
 
 			// Perform elision using standard CCR loop
-			hash := SaveToElidedCache(origString)
+			hash, err := SaveToElidedCache(origString)
+			if err != nil {
+				logWriteElision.Errorf("failed to save elided content to cache; skipping elision: %v", err)
+				nc.Parts[j] = p
+				continue
+			}
 			placeholder := fmt.Sprintf("[%s: %d bytes written. Elided. Retrieve full content: hash=%s]", argLabel, len(origString), hash)
 
 			// Copy-on-write Part and FunctionCall to avoid mutating input slices

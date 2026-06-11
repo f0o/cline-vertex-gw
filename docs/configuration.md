@@ -47,6 +47,9 @@ The following table shows the baseline settings for each profile as implemented 
 | **Max Input Chars** | Unset | Unset | Unset | Unset | 350,000 chars |
 | **Write Action Elision** | Disabled | Disabled | Enabled | Enabled | Enabled |
 | **Write Action Retain Window**| 0 turns | 5 turns | 3 turns | 2 turns | 1 turn |
+| **Smart JSON/Log Crusher** | Disabled | Disabled | Enabled | Enabled | Enabled |
+| **Syntactic Code Compressor** | Disabled | Disabled | Disabled | Enabled | Enabled |
+| **Self-Healed Learning Loop** | Disabled | Disabled | Disabled | Disabled | Enabled |
 
 ---
 
@@ -68,9 +71,16 @@ Individual environment variables can be exported to **override** specific profil
 *   `GOOGLE_CLOUD_PROJECT` — **Required**. Your Google Cloud Platform project ID.
 *   `GOOGLE_CLOUD_LOCATION` — Your target GCP region (e.g. `us-central1` or `europe-west9`). Defaults to `us-central1`.
 
+### Output Token Constraints
+*   `GW_DEFAULT_MAX_OUTPUT_TOKENS` — Default value for `max_output_tokens` substituted when the client request omits an output token cap hint. Defaults to `0` (unset/disabled; uses the model's native default).
+*   `GW_MAX_OUTPUT_TOKENS_HARD` — Absolute ceiling for `max_output_tokens`. Any request carrying or resolving to a larger cap is silently clamped down to this hard cap value. Defaults to `0` (unset/disabled).
+
 ### Prompt Optimization Toggles
 *   `GW_NORMALIZE_WHITESPACE` — Enables stripping of BOMs, carriage returns, trailing space, and multi-line runs.
 *   `GW_CACHE_ALIGNER` — Enables system-prompt prefix cache stabilization by relocating volatile runtime metadata (session IDs, timestamps, working directory) to the system instructions suffix.
+*   `GW_SMART_CRUSHER` — Enables structure-aware smart JSON array collapsing and log line error-prioritized elision on older tool results. Defaults to `true` (Profiles >= 3).
+*   `GW_SYNTAX_COMPRESSOR` — Enables lightweight syntactic code block compression of functions, methods, and imports in Go, Python, JS, TS, Java, Rust, and C++ inside cold historical turns. Defaults to `true` (Profiles >= 4).
+*   `GW_LEARNING_LOOP` — Enables autonomous self-healing failure rule generation, mining client scoldings and persisting rule ledgers to `.clinerules-learned.md`. Defaults to `true` (Profile 5).
 *   `GW_BREAK_LOOP_TRAP` — Enables LLM loop-trap deadlock resolution by deduplicating scoldings and empty turns.
 *   `GW_LOOP_TRAP_NUDGE` — Appends helpful tool-use nudges to user scoldings.
 *   `GW_COLLAPSE_ENV_BLOCKS` — Enables collapsing of stale `<environment_details>` snapshots.
@@ -96,6 +106,7 @@ Individual environment variables can be exported to **override** specific profil
 *   `GW_MAX_INPUT_CHARS` — Soft context budget character ceiling. Triggered sliding history trim when exceeded.
 *   `GW_WRITE_ACTION_ELISION` — Enables elision of historical `write_to_file` and `replace_in_file` payload bodies.
 *   `GW_WRITE_ACTION_RETAIN_WINDOW` — Turn window to keep file write parameters completely unelided.
+*   `GW_GEMINI_UNESCAPE` — Enables automatic HTML-unescaping of Google/Gemini streaming response entities (such as HTML entities inside XML tags) to support clean tool block parsing for clients like Cline. Defaults to `true`.
 
 ### Image & Media Sizes
 *   `GW_MAX_IMAGE_BYTES_PER_PART` — Max decoded size of a single image part. Defaults to `10485760` (10 MiB).
@@ -103,8 +114,15 @@ Individual environment variables can be exported to **override** specific profil
 *   `GW_MAX_MEDIA_BYTES_PER_PART` — Max decoded size of a single audio/video/PDF part. Defaults to `52428800` (50 MiB).
 *   `GW_MAX_MEDIA_BYTES_PER_REQUEST` — Cumulative decoded size of all media in a request. Defaults to `104857600` (100 MiB).
 
+### Google Search Grounding Configurations
+*   `GW_GEMINI_SEARCH_GROUNDING` — Configures Google Search Grounding for Gemini models. Accepts `google_search` (or `google-search` / `google_search_retrieval` / `google-search-retrieval`) to inject the Google Search tool, or `enterprise_web_search` (or `enterprise-web-search`) to enable enterprise-grade grounding. Defaults to unset/disabled.
+*   `GW_GEMINI_SEARCH_THRESHOLD` — Configures the dynamic retrieval threshold (as a floating-point value) for search grounding when using older model engines. If set to `>= 0.0` (such as `0.5`), configures the search tool mode to dynamic with this threshold. Defaults to `-1.0` (unset).
+
 ### Caching Toggles & Cache Directories
 *   `GW_PROMPT_CACHE` — Master toggle for explicit/implicit prompt caching. Defaults to `true`.
+*   `GW_CACHE_MIN_BYTES` — Minimum byte length a prefix must reach before it is eligible for prompt caching. Defaults to `4000`.
+*   `GW_CACHE_TAIL_MIN_TURNS` — Minimum number of conversation turns before the rolling "tail" cache breakpoint is placed. Defaults to `6`.
+*   `GW_CACHE_TAIL_MIN_BYTES` — Minimum cumulative byte size of the conversation prefix up to (and including) the anchor turn before the rolling tail cache breakpoint is placed. Defaults to `16000`.
 *   `GW_CACHE_DIR` — Custom path for on-disk file caching. Defaults to `os.UserCacheDir()/cline-vertex-gw`.
 *   `GW_FS_CACHE_TTL_SEC` — Staleness window for cached model lists and pricing. Defaults to `86400` (1 day).
 *   `GW_ELIDED_TTL_SEC` — Freshness TTL for elided FSCache files. Defaults to `10800` (3 hours).
@@ -118,3 +136,4 @@ Individual environment variables can be exported to **override** specific profil
 *   `GW_PRICING_DEBUG` — Set to `true` to print dynamic SKU matching, resolution pathways, and final rate cards to logs.
 *   `GW_DUMP_PAYLOADS` — Set to `true` to dump complete request and response JSON payloads to output logs for debugging.
 *   `LOG_LEVEL` — Minimum severity level to print (`debug`, `info`, `warn`, `error`). Defaults to `info`.
+*   `LOG_FORMAT` — Specifies the format of the server application logs. Accepts `json` (for structured, production-friendly JSON logs) or `text` (for human-readable, color-coded text logging). Defaults to `json`.

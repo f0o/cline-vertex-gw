@@ -128,6 +128,8 @@ func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
 		if totalSaved > 0 {
 			onCompressionSaved("loopbreak", totalSaved)
 		}
+		// Persistently record this loop trap and compile self-healing rules
+		RecordLoopFailure(contents)
 	}
 
 	// 3. Nudge the model on the last turn if it's a scolding turn

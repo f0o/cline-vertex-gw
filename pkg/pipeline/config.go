@@ -39,6 +39,9 @@ var (
 	toolResultRetainWindow     int32
 	writeActionElision         bool
 	writeActionRetainWindow    int32
+	smartCrusherEnabled        bool
+	syntaxCompressorEnabled    bool
+	learningLoopEnabled        bool
 )
 
 // ActiveProfileName holds the string representation of the currently loaded profile.
@@ -72,6 +75,9 @@ type profileBaseline struct {
 	ToolResultRetainWindow     int32
 	WriteActionElision         bool
 	WriteActionRetainWindow    int32
+	SmartCrusherEnabled        bool
+	SyntaxCompressorEnabled    bool
+	LearningLoopEnabled        bool
 }
 
 func init() {
@@ -136,6 +142,11 @@ func LoadConfig() {
 	// 10. Write Action Elision
 	writeActionElision = envBool("GW_WRITE_ACTION_ELISION", baseline.WriteActionElision)
 	writeActionRetainWindow = envInt32("GW_WRITE_ACTION_RETAIN_WINDOW", baseline.WriteActionRetainWindow)
+
+	// 11. New Context Optimization features
+	smartCrusherEnabled = envBool("GW_SMART_CRUSHER", baseline.SmartCrusherEnabled)
+	syntaxCompressorEnabled = envBool("GW_SYNTAX_COMPRESSOR", baseline.SyntaxCompressorEnabled)
+	learningLoopEnabled = envBool("GW_LEARNING_LOOP", baseline.LearningLoopEnabled)
 }
 
 // getProfileBaseline maps the profile string or integer to the baseline settings.
@@ -174,6 +185,9 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ToolResultRetainWindow:     0,
 			WriteActionElision:         false,
 			WriteActionRetainWindow:    0,
+			SmartCrusherEnabled:        false,
+			SyntaxCompressorEnabled:    false,
+			LearningLoopEnabled:        false,
 		}, "1. Pass-Through (Raw)"
 
 	case "2", "gentle", "conservative":
@@ -205,6 +219,9 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ToolResultRetainWindow:     5,
 			WriteActionElision:         false,
 			WriteActionRetainWindow:    5,
+			SmartCrusherEnabled:        false, // Gentle is conservative, no crushing of tool result formats
+			SyntaxCompressorEnabled:    false, // Gentle is conservative, no syntactic code changes
+			LearningLoopEnabled:        false, // Gentle is passive/read-only, no learned rules writing
 		}, "2. Gentle"
 
 	case "4", "aggressive":
@@ -236,6 +253,9 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ToolResultRetainWindow:     2,
 			WriteActionElision:         true,
 			WriteActionRetainWindow:    2,
+			SmartCrusherEnabled:        true,
+			SyntaxCompressorEnabled:    true,  // Aggressive has DeepCompact enabled, so we can do syntactic code compression
+			LearningLoopEnabled:        false, // Keep learning loop persistent writes restricted to experimental Profile 5
 		}, "4. Aggressive"
 
 	case "5", "extreme", "squeeze":
@@ -267,6 +287,9 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ToolResultRetainWindow:     1,
 			WriteActionElision:         true,
 			WriteActionRetainWindow:    1,
+			SmartCrusherEnabled:        true,
+			SyntaxCompressorEnabled:    true, // Extreme has deep compact enabled, so we do syntactic code compression
+			LearningLoopEnabled:        true, // Enabled for experimental and advanced auto-learning failure recovery
 		}, "5. Extreme Squeeze"
 
 	case "3", "balanced", "default":
@@ -301,6 +324,9 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			ToolResultRetainWindow:     3,
 			WriteActionElision:         true,
 			WriteActionRetainWindow:    3,
+			SmartCrusherEnabled:        true,  // Most aggressive yet safest; safe log/JSON crushing enabled by default
+			SyntaxCompressorEnabled:    false, // Kept false because deep compact is disabled on Profile 3
+			LearningLoopEnabled:        false, // Kept false because we avoid disk rule-writing on default balanced profiles
 		}, "3. Balanced (Default)"
 	}
 }

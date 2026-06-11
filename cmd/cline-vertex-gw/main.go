@@ -158,6 +158,13 @@ func isLoopback(bind string) bool {
 
 func main() {
 	configureLogging()
+
+	// Handle MCP subcommand
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		api.RunMCPServer()
+		return
+	}
+
 	port := os.Getenv(envPort)
 	if port == "" {
 		port = "11434" // Default Ollama port

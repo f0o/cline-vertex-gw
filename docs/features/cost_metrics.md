@@ -29,10 +29,11 @@ Google Cloud offers three execution and pricing tiers for generative workloads, 
 2.  `priority` — Premium speed allocation. Billed under premium rates.
 3.  `flex` (alias `batch` or `flex/batch`) — Latency-tolerant queues. Google delays execution for non-critical loads, **discounting input and output token costs by exactly 50%**.
 
-### ⚠️ Google Search Grounding Override Incompatibility
-A critical production invariant identified in the gateway logs: **Google Search Grounding (web search connection) is physically incompatible with Flex routing.**
-*   **How it works**: Flex queueing is designed for async, non-time-sensitive, offline tasks. Grounding requires real-time online query execution, parsing, and context injection.
-*   **The Override**: If a client passes `X-Routing-Tier: flex` but requests **Google Search Grounding** (globally via `GW_GEMINI_SEARCH_GROUNDING` or dynamically via tools), Google's API gateway silently **bypasses Flex queuing, runs the request under Standard PayGo, and bills at full price** under Standard SKUs. The gateway's cost estimator correctly accounts for this override in its telemetry.
+### 🔗 Under-the-Hood Google Header Translation
+To ensure that Vertex AI's API gateway properly routes your requests to the correct capacity pools, the gateway transparently intercepts, sanitizes, and translates these inbound client tier headers into Google's official, mandated API headers:
+*   **Flex / Batch**: Translates to `X-Vertex-AI-LLM-Request-Type: shared` and `X-Vertex-AI-LLM-Shared-Request-Type: flex`. This triggers the shared, 50%-discounted capacity pool on Google Cloud.
+*   **Priority**: Translates to `X-Vertex-AI-LLM-Request-Type: shared` and `X-Vertex-AI-LLM-Shared-Request-Type: priority`.
+*   **Standard**: Excludes shared headers, running the request under the standard PayGo pool.
 
 ---
 

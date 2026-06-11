@@ -223,7 +223,11 @@ func middleElide(s string) (string, int) {
 
 	elided := tailStart - headEnd
 	// Save original uncompacted text to cache before elision.
-	hash := SaveToElidedCache(s)
+	hash, err := SaveToElidedCache(s)
+	if err != nil {
+		logToolresult.Errorf("failed to save tool result to cache; skipping truncation: %v", err)
+		return s, 0
+	}
 	marker := fmt.Sprintf("\n\n… %d bytes elided (tool result truncated for older turn). Retrieve full content: hash=%s …\n\n", elided, hash)
 	// Only proceed if we actually save more than the marker costs.
 	if elided <= len(marker) {
@@ -240,7 +244,11 @@ func middleElide(s string) (string, int) {
 // completeElide aggressively compresses the entire tool result string s,
 // saving it to FSCache and returning a compact tombstone containing its SHA-256 hash.
 func completeElide(s string) (string, int) {
-	hash := SaveToElidedCache(s)
+	hash, err := SaveToElidedCache(s)
+	if err != nil {
+		logToolresult.Errorf("failed to save complete elided tool result to cache; skipping complete elision: %v", err)
+		return s, 0
+	}
 	marker := fmt.Sprintf("[Tool output masked: %d bytes elided. Retrieve full content: hash=%s]", len(s), hash)
 	if len(s) <= len(marker) {
 		return s, 0
@@ -252,6 +260,9 @@ func completeElide(s string) (string, int) {
 func elideString(s string, aggressive bool) (string, int) {
 	if aggressive {
 		return completeElide(s)
+	}
+	if crushed, saved := SmartCrush(s); saved > 0 {
+		return crushed, saved
 	}
 	return middleElide(s)
 }

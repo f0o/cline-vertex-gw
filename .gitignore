@@ -24,6 +24,10 @@ coverage.html
 .env
 .env.local
 
+# Self-healed learned rule logs
+.clinerules-learned.md
+*.clinerules-learned.md
+
 # Module downloads are cached by CI and Docker layer caching; no need to
 # vendor. The go.sum file provides integrity verification.
 /vendor/
