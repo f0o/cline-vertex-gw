@@ -63,7 +63,12 @@ type substringNeedle struct {
 //
 // When GW_DEDUP_SUBSTRING is off this is a fast-path no-op.
 func DedupSubstringBlocks(contents []*genai.Content) []*genai.Content {
-	if !dedupSubstring || len(contents) < 2 {
+	if !dedupSubstring {
+		logDedupSub.Debugf("substring dedup is disabled; skipping")
+		return contents
+	}
+	if len(contents) < 2 {
+		logDedupSub.Debugf("history size %d < 2; skipping substring dedup", len(contents))
 		return contents
 	}
 
@@ -147,6 +152,8 @@ func DedupSubstringBlocks(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("dedup_substring", totalSaved)
+	} else {
+		logDedupSub.Debugf("no substring duplicates found to dedup")
 	}
 	return out
 }

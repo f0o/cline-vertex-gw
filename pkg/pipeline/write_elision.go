@@ -17,7 +17,16 @@ var logWriteElision = logx.Scoped("write-elision")
 //
 // The original slice and Content/Part/FunctionCall structures are not mutated.
 func ElideHistoricalWriteActions(contents []*genai.Content) []*genai.Content {
-	if !writeActionElision || writeActionRetainWindow <= 0 || len(contents) < 3 {
+	if !writeActionElision {
+		logWriteElision.Debugf("write action elision is disabled; skipping")
+		return contents
+	}
+	if writeActionRetainWindow <= 0 {
+		logWriteElision.Debugf("writeActionRetainWindow <= 0; skipping write action elision")
+		return contents
+	}
+	if len(contents) < 3 {
+		logWriteElision.Debugf("history size %d < 3; skipping write action elision", len(contents))
 		return contents
 	}
 
@@ -123,6 +132,8 @@ func ElideHistoricalWriteActions(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("write_elision", totalSaved)
+	} else {
+		logWriteElision.Debugf("no write/modification actions found to elide")
 	}
 
 	return out

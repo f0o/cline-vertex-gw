@@ -20,7 +20,12 @@ var logDeepcompact = logx.Scoped("deepcompact")
 // This allows long-running agentic workloads to run up to 100+ turns without blowing
 // through prompt budgets or sacrificing system prompts/recent context.
 func DeepCompactHistoricalTurns(contents []*genai.Content) []*genai.Content {
-	if !deepCompactEnabled || len(contents) <= int(deepCompactKeepTurns) {
+	if !deepCompactEnabled {
+		logDeepcompact.Debugf("deep compaction is disabled; skipping")
+		return contents
+	}
+	if len(contents) <= int(deepCompactKeepTurns) {
+		logDeepcompact.Debugf("history size %d <= deepCompactKeepTurns %d; skipping deep compaction", len(contents), deepCompactKeepTurns)
 		return contents
 	}
 
@@ -90,6 +95,8 @@ func DeepCompactHistoricalTurns(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("deepcompact", totalSaved)
+	} else {
+		logDeepcompact.Debugf("no cold historical turns were deep compacted")
 	}
 
 	return out

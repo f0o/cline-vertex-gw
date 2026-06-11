@@ -85,6 +85,18 @@ func LogOptimizerPipelineConfiguration() {
 // Returns the (possibly rewritten) contents and (possibly normalized)
 // system prompt to forward to the per-publisher adapter.
 func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, isGemini bool, opts *GenerationOptions) ([]*genai.Content, string) {
+	initialMsgBytes := 0
+	for _, c := range contents {
+		initialMsgBytes += contentBytes(c)
+	}
+	initialSysBytes := len(systemPrompt)
+
+	logx.For("optimizer").Debug("starting prompt optimizer pipeline",
+		"turns", len(contents),
+		"initial_msg_bytes", initialMsgBytes,
+		"initial_sys_bytes", initialSysBytes,
+	)
+
 	// 0. Resolve any LLM loop-trap by deduplicating scoldings and empty turns first.
 	contents = BreakLoopTrap(contents)
 
@@ -169,6 +181,21 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 
 	// 6. Inject the dynamic retrieve_elided_content tool if any elided hashes exist in context.
 	InjectRetrieveElidedContentTool(contents, opts)
+
+	finalMsgBytes := 0
+	for _, c := range contents {
+		finalMsgBytes += contentBytes(c)
+	}
+	finalSysBytes := len(systemPrompt)
+
+	logx.For("optimizer").Debug("prompt optimizer pipeline execution complete",
+		"turns", len(contents),
+		"initial_msg_bytes", initialMsgBytes,
+		"initial_sys_bytes", initialSysBytes,
+		"final_msg_bytes", finalMsgBytes,
+		"final_sys_bytes", finalSysBytes,
+		"total_bytes_saved", (initialMsgBytes+initialSysBytes)-(finalMsgBytes+finalSysBytes),
+	)
 
 	return contents, systemPrompt
 }

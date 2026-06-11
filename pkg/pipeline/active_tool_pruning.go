@@ -22,7 +22,16 @@ var logPruneActive = logx.Scoped("active_tool_pruning")
 // last activeToolPruningWindow turns, it is dynamically stripped from the allowed
 // active toolset. Essential core tools are whitelisted and never pruned.
 func PruneActiveTools(contents []*genai.Content, opts *GenerationOptions) int {
-	if !activeToolPruningEnabled || opts == nil || len(opts.Tools) == 0 || len(contents) <= int(activeToolPruningWindow) {
+	if !activeToolPruningEnabled {
+		logPruneActive.Debugf("active tool pruning is disabled; skipping")
+		return 0
+	}
+	if opts == nil || len(opts.Tools) == 0 {
+		logPruneActive.Debugf("no tools provided; skipping active tool pruning")
+		return 0
+	}
+	if len(contents) <= int(activeToolPruningWindow) {
+		logPruneActive.Debugf("history size %d <= window %d; skipping active tool pruning", len(contents), activeToolPruningWindow)
 		return 0
 	}
 
@@ -123,6 +132,8 @@ func PruneActiveTools(contents []*genai.Content, opts *GenerationOptions) int {
 		)
 		onCompressionSaved("active_tool_pruning", bytesSaved)
 		opts.Tools = kept
+	} else {
+		logPruneActive.Debugf("no active tools selected for pruning; kept all %d tools", len(opts.Tools))
 	}
 
 	return len(pruned)

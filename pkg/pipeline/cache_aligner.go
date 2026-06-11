@@ -12,7 +12,12 @@ var logCacheAligner = logx.Scoped("cache_aligner")
 // or session IDs) and relocating them to the very end of the system instructions.
 // This preserves KV-cache prefix hits for the massive static instructions and tool schemas.
 func AlignSystemPromptCache(s string) string {
-	if !cacheAlignerEnabled || s == "" {
+	if !cacheAlignerEnabled {
+		logCacheAligner.Debugf("system prompt cache aligner is disabled; skipping")
+		return s
+	}
+	if s == "" {
+		logCacheAligner.Debugf("system prompt is empty; skipping cache alignment")
 		return s
 	}
 
@@ -53,6 +58,7 @@ func AlignSystemPromptCache(s string) string {
 
 	// If no volatile lines were found, return original string unchanged
 	if len(volatileLines) == 0 {
+		logCacheAligner.Debugf("no volatile context lines found in system prompt; skipping cache alignment")
 		return s
 	}
 

@@ -39,9 +39,11 @@ var logNormalize = logx.Scoped("normalize")
 // string, kept separate so handlers can pass it through cleanly.
 func NormalizeWhitespace(contents []*genai.Content) []*genai.Content {
 	if !normalizeWhitespace {
+		logNormalize.Debugf("whitespace normalization is disabled; skipping")
 		return contents
 	}
 	if len(contents) == 0 {
+		logNormalize.Debugf("contents are empty; skipping whitespace normalization")
 		return contents
 	}
 	out := make([]*genai.Content, len(contents))
@@ -79,6 +81,8 @@ func NormalizeWhitespace(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("normalize", totalSaved)
+	} else {
+		logNormalize.Debugf("no whitespace normalization changes needed in contents")
 	}
 	return out
 }
@@ -86,7 +90,12 @@ func NormalizeWhitespace(contents []*genai.Content) []*genai.Content {
 // NormalizeSystemPrompt applies the same transform to a standalone string
 // (the system prompt is carried separately from Contents).
 func NormalizeSystemPrompt(s string) string {
-	if !normalizeWhitespace || s == "" {
+	if !normalizeWhitespace {
+		logNormalize.Debugf("whitespace normalization is disabled; skipping system prompt normalization")
+		return s
+	}
+	if s == "" {
+		logNormalize.Debugf("system prompt is empty; skipping system prompt normalization")
 		return s
 	}
 	ns := normalizeText(s)
@@ -96,6 +105,8 @@ func NormalizeSystemPrompt(s string) string {
 			slog.Int("bytes_saved", saved),
 		)
 		onCompressionSaved("normalize", saved)
+	} else {
+		logNormalize.Debugf("no whitespace normalization changes needed in system prompt")
 	}
 	return ns
 }

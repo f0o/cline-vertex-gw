@@ -30,6 +30,7 @@ func SaveToElidedCache(s string) string {
 // and dynamically appends the retrieve_elided_content tool definition to opts.Tools.
 func InjectRetrieveElidedContentTool(contents []*genai.Content, opts *GenerationOptions) {
 	if opts == nil {
+		logCCR.Debugf("GenerationOptions are nil; skipping retrieve_elided_content tool injection")
 		return
 	}
 
@@ -71,6 +72,7 @@ func InjectRetrieveElidedContentTool(contents []*genai.Content, opts *Generation
 	}
 
 	if !hasElided {
+		logCCR.Debugf("no elided content placeholders found; skipping retrieve_elided_content tool injection")
 		return
 	}
 
@@ -81,6 +83,7 @@ func InjectRetrieveElidedContentTool(contents []*genai.Content, opts *Generation
 		}
 		for _, fd := range t.FunctionDeclarations {
 			if fd != nil && fd.Name == "retrieve_elided_content" {
+				logCCR.Debugf("retrieve_elided_content tool is already present; skipping injection")
 				return
 			}
 		}

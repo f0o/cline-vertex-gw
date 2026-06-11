@@ -73,7 +73,12 @@ type toolExchange struct {
 //
 // When GW_PRUNE_STALE_TOOLS is off this is a fast-path no-op.
 func PruneStaleTools(contents []*genai.Content) []*genai.Content {
-	if !pruneStaleTools || len(contents) < 3 {
+	if !pruneStaleTools {
+		logPruneTools.Debugf("stale tool pruning is disabled; skipping")
+		return contents
+	}
+	if len(contents) < 3 {
+		logPruneTools.Debugf("history size %d < 3; skipping stale tool pruning", len(contents))
 		return contents
 	}
 
@@ -176,6 +181,7 @@ func PruneStaleTools(contents []*genai.Content) []*genai.Content {
 	}
 
 	if len(toReplace) == 0 {
+		logPruneTools.Debugf("no superseded read-only tool calls found to prune")
 		return contents
 	}
 

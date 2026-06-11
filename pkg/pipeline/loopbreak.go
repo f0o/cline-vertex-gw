@@ -23,7 +23,12 @@ var logLoopbreak = logx.Scoped("loopbreak")
 // LLM loop-traps caused by repetitive automated client scoldings
 // and empty assistant responses.
 func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
-	if !breakLoopTrapEnabled || len(contents) == 0 {
+	if !breakLoopTrapEnabled {
+		logLoopbreak.Debugf("loopbreak is disabled; skipping")
+		return contents
+	}
+	if len(contents) == 0 {
+		logLoopbreak.Debugf("contents are empty; skipping loopbreak")
 		return contents
 	}
 
@@ -46,6 +51,7 @@ func BreakLoopTrap(contents []*genai.Content) []*genai.Content {
 
 	// If no scolding turns are found, nothing to do.
 	if lastNoToolIdx == -1 && lastTodoIdx == -1 {
+		logLoopbreak.Debugf("no loop-trap scolding turns found in history")
 		return contents
 	}
 

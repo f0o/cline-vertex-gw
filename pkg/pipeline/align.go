@@ -3,8 +3,12 @@ package pipeline
 import (
 	"strings"
 
+	"go.f0o.dev/cline-vertex-gw/pkg/logx"
 	"google.golang.org/genai"
 )
+
+// logAlign scopes pipeline-compression logs to component=align.
+var logAlign = logx.Scoped("align")
 
 // AlignFunctionCallsAndResponses ensures that for every "model" turn with tool calls,
 // the subsequent "user" turn has exactly matching FunctionResponse parts.
@@ -53,6 +57,7 @@ func extractToolNameFromPlaceholder(s string) string {
 // It returns a new contents slice without mutating the input contents or their parts.
 func AlignFunctionCallsAndResponses(contents []*genai.Content) []*genai.Content {
 	if len(contents) == 0 {
+		logAlign.Debugf("contents are empty; skipping alignment")
 		return contents
 	}
 
@@ -82,6 +87,8 @@ func AlignFunctionCallsAndResponses(contents []*genai.Content) []*genai.Content 
 		if !hasFC {
 			continue
 		}
+
+		logAlign.Debugf("aligning function calls and responses for turn %d...", i)
 
 		// If there is no next turn, we can't align. Vertex AI will reject it anyway
 		// if the conversation doesn't alternate properly, but we preserve as-is.
@@ -163,6 +170,7 @@ func AlignFunctionCallsAndResponses(contents []*genai.Content) []*genai.Content 
 					})
 				} else {
 					// Synthesize dummy FunctionResponse
+					logAlign.Debugf("synthesized dummy response for missing function call response: name=%s ID=%s in next turn %d", fc.Name, fc.ID, i+1)
 					alignedParts = append(alignedParts, &genai.Part{
 						FunctionResponse: &genai.FunctionResponse{
 							ID:       fc.ID,
@@ -188,6 +196,12 @@ func AlignFunctionCallsAndResponses(contents []*genai.Content) []*genai.Content 
 
 		// Note: Unsolicited responses in availableResponses are deliberately dropped (not appended).
 		// Leftover placeholder parts are also dropped as they are unsolicited.
+		if len(availableResponses) > 0 {
+			logAlign.Debugf("dropped %d unsolicited function response(s) in turn %d", len(availableResponses), i+1)
+		}
+		if len(placeholderParts) > 0 {
+			logAlign.Debugf("dropped %d leftover pruned placeholder part(s) in turn %d", len(placeholderParts), i+1)
+		}
 
 		// Filter out nil parts to keep it clean
 		var cleanAlignedParts []*genai.Part

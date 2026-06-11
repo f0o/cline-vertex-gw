@@ -77,7 +77,12 @@ const dedupHashLen = 16
 // turns we're actually shipping. Running it before trim would waste cycles
 // on content that's about to be dropped anyway.
 func DedupReplayedBlocks(contents []*genai.Content) []*genai.Content {
-	if !dedupReplay || len(contents) < 2 {
+	if !dedupReplay {
+		logDedup.Debugf("dedup replay is disabled; skipping")
+		return contents
+	}
+	if len(contents) < 2 {
+		logDedup.Debugf("history size %d < 2; skipping dedup replay", len(contents))
 		return contents
 	}
 
@@ -165,6 +170,8 @@ func DedupReplayedBlocks(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("dedup", totalSaved)
+	} else {
+		logDedup.Debugf("no duplicate blocks found to dedup")
 	}
 	return out
 }

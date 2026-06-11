@@ -49,7 +49,12 @@ const minRetainedTurns = 1
 // see when their budget is too aggressive (e.g. if it fires every request,
 // raise GW_MAX_INPUT_CHARS).
 func TrimContents(contents []*genai.Content, systemPrompt string) []*genai.Content {
-	if maxInputChars == 0 || len(contents) <= minRetainedTurns {
+	if maxInputChars == 0 {
+		logTrim.Debugf("trimming is disabled; skipping")
+		return contents
+	}
+	if len(contents) <= minRetainedTurns {
+		logTrim.Debugf("history size %d <= minRetainedTurns %d; skipping trimming", len(contents), minRetainedTurns)
 		return contents
 	}
 

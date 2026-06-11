@@ -54,7 +54,12 @@ var logToolresult = logx.Scoped("toolresult")
 // already-shrunk sizes (truncation may make trimming unnecessary), and
 // BEFORE DedupReplayedBlocks so dedup hashes the post-truncation bodies.
 func TruncateToolResults(contents []*genai.Content) []*genai.Content {
-	if !toolResultTruncate || len(contents) < 2 {
+	if !toolResultTruncate {
+		logToolresult.Debugf("toolresult truncation is disabled; skipping")
+		return contents
+	}
+	if len(contents) < 2 {
+		logToolresult.Debugf("history size %d < 2; skipping toolresult truncation", len(contents))
 		return contents
 	}
 
@@ -133,6 +138,8 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("toolresult", totalSaved)
+	} else {
+		logToolresult.Debugf("no oversized tool results found to truncate")
 	}
 	return out
 }

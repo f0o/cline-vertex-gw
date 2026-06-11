@@ -60,7 +60,12 @@ const (
 // When the knob is disabled, the input slice is returned unchanged (fast
 // path, no allocation).
 func CollapseEnvBlocks(contents []*genai.Content) []*genai.Content {
-	if !collapseEnvBlocks || len(contents) == 0 {
+	if !collapseEnvBlocks {
+		logEnvblocks.Debugf("envblock collapsing is disabled; skipping")
+		return contents
+	}
+	if len(contents) == 0 {
+		logEnvblocks.Debugf("contents are empty; skipping envblock collapsing")
 		return contents
 	}
 
@@ -100,6 +105,8 @@ func CollapseEnvBlocks(contents []*genai.Content) []*genai.Content {
 			slog.Int("bytes_saved", totalSaved),
 		)
 		onCompressionSaved("envblocks", totalSaved)
+	} else {
+		logEnvblocks.Debugf("no environment details blocks found to collapse")
 	}
 	return out
 }
