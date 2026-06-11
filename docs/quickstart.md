@@ -1,184 +1,119 @@
-# Quick Start Guide
+# Deployment & Quickstart
 
-This guide gets you up and running with `cline-vertex-gw` in just a few minutes.
-
----
-
-## Prerequisites
-
-Before starting, ensure you have the following resources and permissions:
-
-1. **Google Cloud Project:** An active GCP project with the Vertex AI API enabled.
-2. **Authentication (ADC):** The gateway uses Google's standard Application Default Credentials (ADC) to authenticate with Google Cloud.
-   - For local development, install the `gcloud` CLI and run:
-     ```bash
-     gcloud auth application-default login
-     ```
-3. **Core Environment Variables:** Set your Google Cloud Project ID and location/region:
-   ```bash
-   export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
-   export GOOGLE_CLOUD_LOCATION="us-central1" # Or Europe/Asia locations
-   ```
+Getting started with the **Cline Vertex AI Gateway** is a straightforward process. The gateway relies on standard Google Cloud credential configurations, compiles into a lightweight binary, and can be run locally, via Docker, or deployed as a shared service.
 
 ---
 
-## 1. Run the Gateway
+## 🔐 1. Google Cloud Authentication
 
-The gateway listens on port `11434` (Ollama's standard port) by default. Choose one of the following methods to run the proxy.
+The gateway is built on top of the Google Cloud Go SDK, which natively supports **Google Application Default Credentials (ADC)**. This means it can safely authenticate against Vertex AI without requiring hardcoded credential strings or complex configurations.
 
-### Option A: Run via Docker
-To run locally, share your local Google credentials with the container:
+Choose **one** of the following methods to authenticate:
+
+### Method A: Local Developer (Recommended)
+If running on a local development machine, run the following command to generate standard local ADC files:
+
+```bash
+gcloud auth application-default login
+```
+
+This commands writes a secure token file to:
+*   **macOS/Linux**: `~/.config/gcloud/application_default_credentials.json`
+*   **Windows**: `%APPDATA%\gcloud\application_default_credentials.json`
+
+The gateway will find and read this file automatically.
+
+### Method B: Service Account Key (Server Deployment)
+If deploying onto an external server or cloud VM:
+1.  Create a Service Account in the [Google Cloud Console](https://console.cloud.google.com).
+2.  Assign the Service Account the **Vertex AI User** role (`roles/aiplatform.user`) and, if using cost-estimation metrics, **Billing Account Viewer** (`roles/billing.viewer`).
+3.  Generate and download a JSON-formatted Service Account Key.
+4.  Expose the path to this key via the standard Google environment variable:
+    ```bash
+    export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-key.json"
+    ```
+
+---
+
+## 🏃 2. Running the Gateway
+
+Choose how you want to compile and run the gateway server:
+
+### Method A: Pre-built Docker Container (easiest)
+Run the gateway in a lightweight, secure container. We map port `11434` (Ollama's default port) and mount the local GCP credential folder so the container can authenticate:
 
 ```bash
 docker run -d \
   -p 11434:11434 \
-  -v ~/.config/gcloud:/root/.config/gcloud:ro \
-  -e GOOGLE_CLOUD_PROJECT="$GOOGLE_CLOUD_PROJECT" \
-  -e GOOGLE_CLOUD_LOCATION="$GOOGLE_CLOUD_LOCATION" \
+  -e GOOGLE_CLOUD_PROJECT="your-gcp-project-id" \
+  -e GOOGLE_CLOUD_LOCATION="us-central1" \
+  -e GW_PROFILE="balanced" \
+  -v ~/.config/gcloud:/home/nonroot/.config/gcloud:ro \
   ghcr.io/f0o/cline-vertex-gw:latest
 ```
 
-*Note:* Mounting `~/.config/gcloud` shares your local ADC credentials with the container. In production environments (like Cloud Run or GKE), attach an IAM service account to the execution resource instead, and omit the volume mount.
-
-### Option B: Build & Run from Source
-Ensure you have Go (1.22+ or 1.26 recommended) installed:
+### Method B: Native Compilation (From Source)
+Ensure you have Go 1.22+ installed, then compile and run the binary natively:
 
 ```bash
 # Clone the repository
 git clone https://github.com/f0o/cline-vertex-gw.git
 cd cline-vertex-gw
 
-# Compile the optimized binary
+# Build the executable
 make build
 
-# Launch the server
+# Export required project parameters
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+export GW_PROFILE="balanced"
+
+# Execute the binary
 ./cline-vertex-gw
 ```
 
 ---
 
-## 2. Quick Smoke Tests
+## 🔌 3. Client Integrations
 
-Verify the gateway is running correctly by querying its endpoints locally:
+Once the gateway is running on `http://localhost:11434` (or your customized `BIND_ADDR`), configure your client tools to use it:
 
-### A. Verify Model Discovery (Ollama Dialect)
-Query the `/api/tags` endpoint to discover supported models formatted as local Ollama tags:
+### Integration A: Cline (Ollama Protocol)
+Cline can natively discover all available models of all enabled publishers over the Ollama `/api/tags` route.
 
-```bash
-curl -s http://127.0.0.1:11434/api/tags | json_pp
-```
+1.  In the VS Code sidebar, open **Cline**.
+2.  Click the **Settings** (Gear Icon) in the top-right.
+3.  Set **Provider** to `Ollama`.
+4.  Keep the **Ollama URL** at its default value: `http://localhost:11434`.
+5.  Click the **Model** dropdown. It will automatically load the model list from the gateway. 
+6.  Select your preferred model (e.g. `google/gemini-2.5-pro` or `anthropic/claude-3-5-sonnet-v2`) and close the settings to begin.
 
-*Expected response structure:*
-```json
-{
-   "models" : [
-      {
-         "name" : "gemini-2.0-flash",
-         "model" : "gemini-2.0-flash",
-         "details" : {
-            "family" : "gemini",
-            "format" : "gguf"
-         }
-      },
-      {
-         "name" : "claude-3-5-sonnet",
-         "model" : "claude-3-5-sonnet",
-         "details" : {
-            "family" : "claude",
-            "format" : "gguf"
-         }
-      }
-   ]
-}
-```
+---
 
-### B. Verify Chat Streaming (Ollama Dialect)
-Execute a streaming chat completion over the Ollama interface:
+### Integration B: OpenAI-Compatible Clients
+If using standard OpenAI-compatible development tools (such as LiteLLM, prompt foo, or the official Python `openai` SDK), connect using the OpenAI client surface.
 
-```bash
-curl -i http://127.0.0.1:11434/api/chat -d '{
-  "model": "gemini-2.0-flash",
-  "messages": [
-    {"role": "user", "content": "Hello! Respond in exactly three words."}
-  ],
-  "stream": true
-}'
-```
+#### Example: Python SDK
+Configure the OpenAI Python client to point directly at the gateway's `/v1` surface.
 
-This returns a stream of JSON objects (NDJSON) representing response tokens, followed by a final metrics frame containing token usage.
+```python
+import openai
 
-### C. Verify OpenAI Dialect
-Submit a non-streaming chat request to the OpenAI-compatible endpoint:
+client = openai.OpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="your-gateway-auth-token-or-dummy-string"  # Must match GATEWAY_AUTH_TOKEN if configured
+)
 
-```bash
-curl -i http://127.0.0.1:11434/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-3-5-sonnet",
-    "messages": [
-      {"role": "user", "content": "Hello! Respond in exactly three words."}
+completion = client.chat.completions.create(
+    model="google/gemini-2.5-pro",
+    messages=[
+        {"role": "system", "content": "You are a concise, helpful assistant."},
+        {"role": "user", "content": "Hello, world!"}
     ],
-    "stream": false
-  }'
-```
+    stream=True
+)
 
----
-
-## 3. Connecting Clients
-
-To ensure the most robust, high-performance experience with real-time stream metrics and delta-by-delta streaming tool-calling outputs, it is **strongly recommended** to connect your clients utilizing the **OpenAI-Compatible** provider configuration over the Ollama compatibility fallback.
-
-### Connecting VS Code Cline
-
-#### Method A: OpenAI Compatible Provider (Recommended & Superior)
-Using the OpenAI compatible provider unlocks real-time tool calling streaming and detailed usage metrics inside Cline.
-
-1. Open Cline's settings pane inside VS Code.
-2. Select **OpenAI Compatible** as the API Provider.
-3. Set the **Base URL** field to: `http://localhost:11434/v1`
-4. Enter any non-empty string as the **API Key** (if you have configured `GATEWAY_AUTH_TOKEN` on the gateway, enter the exact token value here).
-5. Set your desired **Model ID** (e.g. `claude-3-5-sonnet`, `gemini-2.0-flash`, etc.).
-6. Enter custom model details, or click save. Enjoy lightning-fast, real-time tool stream updates!
-
-#### Method B: Ollama Provider (Compatibility Fallback)
-Maintained as a drop-in local discovery option:
-
-1. Open Cline's settings in VS Code.
-2. Select **Ollama** as the API Provider.
-3. In the **Ollama Base URL** field, enter: `http://localhost:11434`
-4. The **Model** picker will automatically populate with all available models (Gemini, Claude, Llama, Mistral, etc.) discovered from Vertex AI! Select your desired model.
-
----
-
-### Connecting Continue
-
-To configure Continue (`config.json`), we recommend using the OpenAI provider setup to guarantee optimal tool usage and metrics handling:
-
-#### Recommended Configuration (OpenAI Provider):
-```json
-{
-  "models": [
-    {
-      "title": "Claude 3.5 Sonnet (Vertex)",
-      "provider": "openai",
-      "model": "claude-3-5-sonnet",
-      "apiBase": "http://localhost:11434/v1",
-      "apiKey": "placeholder"
-    }
-  ]
-}
-```
-
-#### Fallback Configuration (Ollama Provider):
-```json
-{
-  "models": [
-    {
-      "title": "Claude 3.5 Sonnet (Vertex)",
-      "provider": "ollama",
-      "model": "claude-3-5-sonnet",
-      "apiBase": "http://localhost:11434"
-    }
-  ]
-}
+for chunk in completion:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
 ```

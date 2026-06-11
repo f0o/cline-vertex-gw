@@ -10,10 +10,10 @@ import (
 // withToolResult temporarily overrides the tool-result-truncation knobs.
 func withToolResult(t *testing.T, enabled bool, max, head, tail int32) func() {
 	t.Helper()
-	pe, pm, ph, pt := toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes
-	toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes = enabled, max, head, tail
+	pe, pm, ph, pt, pr := toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow
+	toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = enabled, max, head, tail, 1
 	return func() {
-		toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes = pe, pm, ph, pt
+		toolResultTruncate, toolResultMaxBytes, toolResultHeadBytes, toolResultTailBytes, toolResultRetainWindow = pe, pm, ph, pt, pr
 	}
 }
 
@@ -120,11 +120,11 @@ func withProgressiveToolResult(t *testing.T, enabled bool, max, head, tail, reta
 
 func TestTruncate_ProgressiveMasking(t *testing.T) {
 	// Retain window = 2 turns:
-	// Turn 4 (lastIdx): distance 0 -> exempt
-	// Turn 3: distance 1 -> within window (< 2) -> middle-elided
-	// Turn 2: distance 2 -> outside window (>= 2) -> complete-elided / masked
-	// Turn 1: distance 3 -> outside window (>= 2) -> complete-elided / masked (untouched because small)
-	// Turn 0: distance 4 -> outside window (>= 2) -> complete-elided / masked
+	// Turn 4 (lastIdx): distance 0 -> exempt (< 2) -> full content
+	// Turn 3: distance 1 -> within window (< 2) -> full content
+	// Turn 2: distance 2 -> outside window (>= 2) -> middle-elided
+	// Turn 1: distance 3 -> outside window (>= 2) -> middle-elided (untouched because small)
+	// Turn 0: distance 4 -> outside window (>= 4) -> complete-elided / masked
 	defer withProgressiveToolResult(t, true, 200, 50, 30, 2)()
 
 	big := strings.Repeat("test line of tool output\n", 500) // over 200 bytes
@@ -144,17 +144,17 @@ func TestTruncate_ProgressiveMasking(t *testing.T) {
 		t.Errorf("latest turn mutated: %s", out[4].Parts[0].Text)
 	}
 
-	// Turn 3 is distance 1 from Turn 4. 1 < 2, so middle-elided
-	if !strings.Contains(out[3].Parts[0].Text, "bytes elided (tool result truncated") {
-		t.Errorf("turn 3 was not middle-elided: %s", out[3].Parts[0].Text)
+	// Turn 3 is distance 1 from Turn 4. 1 < 2, so must be fully intact and not elided at all
+	if out[3].Parts[0].Text != big {
+		t.Errorf("turn 3 was mutated: %s", out[3].Parts[0].Text)
 	}
 
-	// Turn 2 is distance 2. 2 >= 2, so aggressively masked/complete-elided
-	if !strings.Contains(out[2].Parts[0].Text, "Tool output masked") {
-		t.Errorf("turn 2 was not aggressively masked: %s", out[2].Parts[0].Text)
+	// Turn 2 is distance 2. 2 >= 2, so middle-elided
+	if !strings.Contains(out[2].Parts[0].Text, "bytes elided (tool result truncated") {
+		t.Errorf("turn 2 was not middle-elided: %s", out[2].Parts[0].Text)
 	}
 
-	// Turn 0 is distance 4. 4 >= 2, so aggressively masked/complete-elided
+	// Turn 0 is distance 4. 4 >= 4, so aggressively masked/complete-elided
 	if !strings.Contains(out[0].Parts[0].Text, "Tool output masked") {
 		t.Errorf("turn 0 was not aggressively masked: %s", out[0].Parts[0].Text)
 	}

@@ -38,6 +38,7 @@ var (
 	maxInputChars              int32
 	toolResultRetainWindow     int32
 	writeActionElision         bool
+	writeActionRetainWindow    int32
 )
 
 // ActiveProfileName holds the string representation of the currently loaded profile.
@@ -70,6 +71,7 @@ type profileBaseline struct {
 	MaxInputChars              int32
 	ToolResultRetainWindow     int32
 	WriteActionElision         bool
+	WriteActionRetainWindow    int32
 }
 
 func init() {
@@ -133,6 +135,7 @@ func LoadConfig() {
 
 	// 10. Write Action Elision
 	writeActionElision = envBool("GW_WRITE_ACTION_ELISION", baseline.WriteActionElision)
+	writeActionRetainWindow = envInt32("GW_WRITE_ACTION_RETAIN_WINDOW", baseline.WriteActionRetainWindow)
 }
 
 // getProfileBaseline maps the profile string or integer to the baseline settings.
@@ -170,6 +173,7 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			MaxInputChars:              0,
 			ToolResultRetainWindow:     0,
 			WriteActionElision:         false,
+			WriteActionRetainWindow:    0,
 		}, "1. Pass-Through (Raw)"
 
 	case "2", "gentle", "conservative":
@@ -200,6 +204,7 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			MaxInputChars:              0,
 			ToolResultRetainWindow:     5,
 			WriteActionElision:         false,
+			WriteActionRetainWindow:    5,
 		}, "2. Gentle"
 
 	case "4", "aggressive":
@@ -230,6 +235,7 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			MaxInputChars:              0,
 			ToolResultRetainWindow:     2,
 			WriteActionElision:         true,
+			WriteActionRetainWindow:    2,
 		}, "4. Aggressive"
 
 	case "5", "extreme", "squeeze":
@@ -260,6 +266,7 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			MaxInputChars:              350000,
 			ToolResultRetainWindow:     1,
 			WriteActionElision:         true,
+			WriteActionRetainWindow:    1,
 		}, "5. Extreme Squeeze"
 
 	case "3", "balanced", "default":
@@ -293,6 +300,7 @@ func getProfileBaseline(p string) (profileBaseline, string) {
 			MaxInputChars:              0,
 			ToolResultRetainWindow:     3,
 			WriteActionElision:         true,
+			WriteActionRetainWindow:    3,
 		}, "3. Balanced (Default)"
 	}
 }

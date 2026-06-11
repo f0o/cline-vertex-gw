@@ -12,12 +12,12 @@ var logWriteElision = logx.Scoped("write-elision")
 
 // ElideHistoricalWriteActions scans historical assistant turns (FunctionCalls)
 // for file write/modification calls (specifically write_to_file and replace_in_file).
-// If a call's text argument is very large and is older than 2 turns, it is elided,
+// If a call's text argument is very large and is older than writeActionRetainWindow turns, it is elided,
 // saved to the FSCache, and replaced with a placeholder, saving thousands of tokens.
 //
 // The original slice and Content/Part/FunctionCall structures are not mutated.
 func ElideHistoricalWriteActions(contents []*genai.Content) []*genai.Content {
-	if !writeActionElision || len(contents) < 3 {
+	if !writeActionElision || writeActionRetainWindow <= 0 || len(contents) < 3 {
 		return contents
 	}
 
@@ -35,7 +35,8 @@ func ElideHistoricalWriteActions(contents []*genai.Content) []*genai.Content {
 	elidedCount := 0
 
 	for i, c := range contents {
-		if c == nil || i == lastIdx || (lastIdx-i) < 2 {
+		distance := int32(lastIdx - i)
+		if c == nil || i == lastIdx || distance < writeActionRetainWindow {
 			out[i] = c
 			continue
 		}

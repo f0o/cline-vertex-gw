@@ -180,3 +180,66 @@ func TestFSCachePricingTableRoundTrip(t *testing.T) {
 		t.Errorf("pricing round-trip mismatch: got %+v want %+v", got, want)
 	}
 }
+
+// TestCleanupElidedFiles verifies that CleanupElidedFiles correctly deletes
+// elided files older than the specified TTL while leaving other files untouched.
+func TestCleanupElidedFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envCacheDir, dir)
+
+	// Create files:
+	// 1. Fresh elided file
+	// 2. Stale elided file
+	// 3. Stale other file (should not be deleted)
+
+	freshElided := "elided_fresh.json"
+	staleElided := "elided_stale.json"
+	staleOther := "pricing.json"
+
+	if err := WriteFSCache(freshElided, "fresh content"); err != nil {
+		t.Fatalf("failed to write fresh elided: %v", err)
+	}
+	if err := WriteFSCache(staleElided, "stale content"); err != nil {
+		t.Fatalf("failed to write stale elided: %v", err)
+	}
+	if err := WriteFSCache(staleOther, "stale other content"); err != nil {
+		t.Fatalf("failed to write stale other: %v", err)
+	}
+
+	// Backdate stale files using os.Chtimes
+	now := time.Now()
+	staleTime := now.Add(-2 * time.Hour)
+
+	if err := os.Chtimes(filepath.Join(dir, staleElided), staleTime, staleTime); err != nil {
+		t.Fatalf("failed to backdate stale elided: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, staleOther), staleTime, staleTime); err != nil {
+		t.Fatalf("failed to backdate stale other: %v", err)
+	}
+
+	// Run cleanup with 1 hour TTL
+	ttl := 1 * time.Hour
+	deleted, err := CleanupElidedFiles(ttl)
+	if err != nil {
+		t.Fatalf("CleanupElidedFiles failed: %v", err)
+	}
+
+	if deleted != 1 {
+		t.Errorf("expected 1 file to be deleted, got %d", deleted)
+	}
+
+	// Verify that staleElided is deleted
+	if _, err := os.Stat(filepath.Join(dir, staleElided)); !os.IsNotExist(err) {
+		t.Errorf("expected stale elided file to be deleted, but it exists")
+	}
+
+	// Verify that freshElided is still there
+	if _, err := os.Stat(filepath.Join(dir, freshElided)); err != nil {
+		t.Errorf("expected fresh elided file to remain, but got error: %v", err)
+	}
+
+	// Verify that staleOther is still there
+	if _, err := os.Stat(filepath.Join(dir, staleOther)); err != nil {
+		t.Errorf("expected stale non-elided file to remain, but got error: %v", err)
+	}
+}

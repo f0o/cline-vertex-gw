@@ -8,7 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.f0o.dev/cline-vertex-gw/pkg/logx"
 )
+
+var logCache = logx.Scoped("cache")
 
 // Filesystem cache for Models and Billing information.
 //
@@ -156,4 +160,47 @@ func ReadFSCache(name string, out any) (fresh bool, err error) {
 	ttl := fsCacheTTL()
 	fresh = ttl > 0 && !env.WrittenAt.IsZero() && time.Since(env.WrittenAt) < ttl
 	return fresh, nil
+}
+
+// CleanupElidedFiles scans the cache directory and deletes any files starting with "elided_"
+// and ending with ".json" that have a modification time older than the specified TTL.
+// It returns the number of deleted files and any error encountered.
+func CleanupElidedFiles(ttl time.Duration) (int, error) {
+	dir, err := cacheDir()
+	if err != nil {
+		return 0, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("read cache dir: %w", err)
+	}
+
+	now := time.Now()
+	deletedCount := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, "elided_") && strings.HasSuffix(name, ".json") {
+			info, err := entry.Info()
+			if err != nil {
+				logCache.Warnf("failed to get info for cached file %s: %v", name, err)
+				continue
+			}
+
+			if now.Sub(info.ModTime()) > ttl {
+				path := filepath.Join(dir, name)
+				if err := os.Remove(path); err != nil {
+					logCache.Warnf("failed to delete stale cached file %s: %v", name, err)
+					continue
+				}
+				deletedCount++
+			}
+		}
+	}
+
+	return deletedCount, nil
 }

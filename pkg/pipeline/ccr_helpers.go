@@ -56,6 +56,14 @@ func InjectRetrieveElidedContentTool(contents []*genai.Content, opts *Generation
 					}
 				}
 			}
+			if p.FunctionCall != nil {
+				for _, v := range p.FunctionCall.Args {
+					if s, ok := v.(string); ok && strings.Contains(s, "Retrieve full content: hash=") {
+						hasElided = true
+						break
+					}
+				}
+			}
 		}
 		if hasElided {
 			break
@@ -98,4 +106,25 @@ func InjectRetrieveElidedContentTool(contents []*genai.Content, opts *Generation
 
 	opts.Tools = append(opts.Tools, toolDef)
 	logCCR.Debugf("dynamically injected retrieve_elided_content tool into active turn")
+}
+
+// HasRetrievalToolCall scans contents to see if any retrieval tool calls or responses are present.
+func HasRetrievalToolCall(contents []*genai.Content) bool {
+	for _, c := range contents {
+		if c == nil {
+			continue
+		}
+		for _, p := range c.Parts {
+			if p == nil {
+				continue
+			}
+			if p.FunctionCall != nil && p.FunctionCall.Name == "retrieve_elided_content" {
+				return true
+			}
+			if p.FunctionResponse != nil && p.FunctionResponse.Name == "retrieve_elided_content" {
+				return true
+			}
+		}
+	}
+	return false
 }

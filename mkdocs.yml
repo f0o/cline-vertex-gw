@@ -1,8 +1,6 @@
-site_name: cline-vertex-gw
-site_url: https://f0o.github.io/cline-vertex-gw
-site_description: An Ollama-compatible and OpenAI-compatible HTTP gateway in front of Google Cloud Vertex AI.
-repo_name: f0o/cline-vertex-gw
-repo_url: https://github.com/f0o/cline-vertex-gw
+site_name: Cline Vertex AI Gateway
+site_description: An Ollama and OpenAI compatible gateway translation proxy for Google Cloud Vertex AI models.
+site_url: https://go.f0o.dev/cline-vertex-gw
 
 theme:
   name: material
@@ -10,14 +8,14 @@ theme:
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: teal
-      accent: purple
+      accent: teal
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: teal
-      accent: purple
+      accent: teal
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -29,20 +27,11 @@ theme:
     - search.highlight
     - content.code.copy
 
-nav:
-  - Home: index.md
-  - Quick Start: quickstart.md
-  - Configuration: configuration.md
-  - Features:
-      - Multimodal Support: features/multimodal.md
-      - Tool Calling: features/tool_calling.md
-      - Prometheus Metrics: features/metrics.md
-      - Cost Estimation: features/cost_estimation.md
-      - Token-Cost Optimization: features/optimization.md
-  - API Reference: api_reference.md
-  - Development Guide: development.md
+plugins:
+  - search
 
 markdown_extensions:
+  - admonition
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -53,5 +42,33 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - tables
+          format: !!codepymdownx.superfences.fence_mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Introduction: index.md
+  - Quickstart: quickstart.md
+  - Configuration: configuration.md
+  - API Reference: api_reference.md
+  - Development: development.md
+  - Core Features:
+      - Multimodal Inputs: features/multimodal.md
+      - Native Tool Calling: features/tool_calling.md
+      - Real-Time Billing & Metrics: features/cost_metrics.md
+  - Optimization Pipeline:
+      - Pipeline Overview: optimization/overview.md
+      - 0. Loop Break Trap: optimization/loopbreak.md
+      - 0a. Active Tool Pruning: optimization/active_tool_pruning.md
+      - 0b. Prune Stale Tools: optimization/prune_tools.md
+      - 1a. Normalize Whitespace: optimization/normalize.md
+      - 1b. Cache Aligner: optimization/cache_aligner.md
+      - 2. Collapse Env Blocks: optimization/envblocks.md
+      - 2b. Tool Result Truncation: optimization/toolresult.md
+      - 2b1. Write Action Elision: optimization/write_elision.md
+      - 2c. Deep Compaction: optimization/deepcompact.md
+      - 3. Context Budget Trim: optimization/budget.md
+      - 4. Duplicate Block Dedup: optimization/dedup.md
+      - 4b. Substring Block Dedup: optimization/dedup_substring.md
+      - 5. Function Call Alignment: optimization/align.md
+      - Lossless Retrieve (CCR): optimization/ccr.md

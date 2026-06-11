@@ -96,7 +96,9 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 	//     byte-shaping steps, so later stages operate on the smaller history.
 	//     Opt-in (GW_PRUNE_STALE_TOOLS, default off) — it removes whole turns,
 	//     so it ships disabled and is gated by strict call/response-pair safety.
-	contents = PruneStaleTools(contents)
+	if !HasRetrievalToolCall(contents) {
+		contents = PruneStaleTools(contents)
+	}
 
 	// 1. Normalize whitespace FIRST. CRLF/CR collapse, trailing-space
 	//    trim, and blank-line capping shrink each block in a lossless
@@ -117,24 +119,26 @@ func ApplyCompressionPipeline(contents []*genai.Content, systemPrompt string, is
 	//    against post-collapse sizes.
 	contents = CollapseEnvBlocks(contents)
 
-	// 2b. Middle-elide oversized tool results (read_file dumps, terminal
-	//     output) on every turn except the latest. Runs BEFORE TrimContents
-	//     so the byte budget is computed against the shrunken sizes (and may
-	//     avoid dropping whole turns), and BEFORE Dedup so dedup hashes the
-	//     post-truncation bodies. On by default (GW_TOOL_RESULT_TRUNCATE) —
-	//     low-risk because it keeps head+tail and never touches the latest turn.
-	contents = TruncateToolResults(contents)
+	if !HasRetrievalToolCall(contents) {
+		// 2b. Middle-elide oversized tool results (read_file dumps, terminal
+		//     output) on every turn except the latest. Runs BEFORE TrimContents
+		//     so the byte budget is computed against the shrunken sizes (and may
+		//     avoid dropping whole turns), and BEFORE Dedup so dedup hashes the
+		//     post-truncation bodies. On by default (GW_TOOL_RESULT_TRUNCATE) —
+		//     low-risk because it keeps head+tail and never touches the latest turn.
+		contents = TruncateToolResults(contents)
 
-	// 2b1. Elide massive historical file write and modification tool calls (write_to_file, replace_in_file)
-	//      on assistant turns older than 2 turns. This is completely lossless as full contents are
-	//      saved in FSCache and retrievable on-demand via retrieve_elided_content.
-	contents = ElideHistoricalWriteActions(contents)
+		// 2b1. Elide massive historical file write and modification tool calls (write_to_file, replace_in_file)
+		//      on assistant turns older than 2 turns. This is completely lossless as full contents are
+		//      saved in FSCache and retrievable on-demand via retrieve_elided_content.
+		contents = ElideHistoricalWriteActions(contents)
 
-	// 2c. Deeply compact cold historical turns (turns older than GW_DEEP_COMPACT_KEEP_TURNS)
-	//     by aggressively shrinking any large text blocks or tool outputs down to tiny
-	//     high-density placeholders. Runs BEFORE TrimContents so that shrunk turns fit
-	//     into the byte budget and are preserved in context instead of being discarded entirely.
-	contents = DeepCompactHistoricalTurns(contents)
+		// 2c. Deeply compact cold historical turns (turns older than GW_DEEP_COMPACT_KEEP_TURNS)
+		//     by aggressively shrinking any large text blocks or tool outputs down to tiny
+		//     high-density placeholders. Runs BEFORE TrimContents so that shrunk turns fit
+		//     into the byte budget and are preserved in context instead of being discarded entirely.
+		contents = DeepCompactHistoricalTurns(contents)
+	}
 
 	// 3. Drop oldest non-system turns until the conversation fits the
 	//    GW_MAX_INPUT_CHARS byte budget. Must run BEFORE the per-adapter

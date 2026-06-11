@@ -1,124 +1,120 @@
-# Configuration Manual
+# Configuration Reference
 
-All configurations for `cline-vertex-gw` are managed through environment variables. The gateway does not require any static configuration files.
-
----
-
-## Server Environment Variables
-
-The following table lists all general server configuration variables:
-
-| Variable | Default Value | Purpose / Constraint |
-|---|:---:|---|
-| `PORT` | `11434` | TCP port to listen on. |
-| `BIND_ADDR` | `127.0.0.1` | Network interface to bind. Defaults to local loopback only for safety. Set to `0.0.0.0` in Docker. |
-| `GOOGLE_CLOUD_PROJECT` | _required_ | Google Cloud Project ID. |
-| `GOOGLE_CLOUD_LOCATION` | _required_ | Vertex AI location region (e.g., `us-central1`, `us-east5`, `europe-west4`, etc.). |
-| `GATEWAY_AUTH_TOKEN` | _empty_ | If set, every API request must carry a matching `Authorization: Bearer <token>` header. |
-| `MAX_REQUEST_MB` | `16` | Per-request body cap (in MiB). Requests larger than this return `413 Request Entity Too Large`. |
-| `READ_HEADER_TIMEOUT_SEC` | `10` | Server `ReadHeaderTimeout` in seconds, protecting against Slowloris attacks. |
-| `IDLE_TIMEOUT_SEC` | `120` | Keep-alive idle socket timeout in seconds. |
-| `WRITE_TIMEOUT_SEC` | `0` | Server-level write timeout in seconds. **Leave at 0** for streaming endpoints. |
-| `SHUTDOWN_TIMEOUT_SEC` | `30` | Max time (seconds) to wait for draining active requests upon SIGTERM. |
-| `LOG_LEVEL` | `info` | Logging verbosity: `debug` \| `info` \| `warn` \| `error`. |
-| `LOG_FORMAT` | `json` | Logging format layout: `json` (structured logs) \| `text` (human-readable). |
-| `GW_TAGS_CACHE_TTL_SEC` | `60` | TTL in seconds for the model discovery tags cache to optimize aggressive picker polling. |
+The gateway is entirely configured via standard environment variables. This design makes it highly compatible with containers (such as Docker and Kubernetes) and simple local scripts.
 
 ---
 
-## Google Cloud Authentication
+## 🌟 The Master Toggle: `GW_PROFILE`
 
-The gateway utilizes Google's standard **Application Default Credentials (ADC)**. No custom credentials or secrets files are configured inside the gateway. The runtime resolves ADC in the following order:
+Instead of requiring you to configure up to 24 individual compression parameters, the gateway groups them into **5 Progressive Optimization Profiles**. 
 
-1. **`GOOGLE_APPLICATION_CREDENTIALS`:** Environment variable pointing to a JSON service account key file.
-2. **`gcloud` Authenticated User:** Local development session authenticated via `gcloud auth application-default login`.
-3. **Attached Service Account:** The default service account attached to the Google Cloud hosting resource (e.g. Cloud Run, GKE, GCE) when deployed in GCP.
+Expose `GW_PROFILE` with one of the following levels:
 
----
+1.  `1`, `passthrough`, or `raw` — Bypasses all lossy prompt compression. Delivers the raw client history directly upstream.
+2.  `2`, `gentle`, or `conservative` — Lossless whitespace and system-prompt optimizations. Keeps env blocks and history mostly intact.
+3.  `3`, `balanced`, or `default` — **The recommended setting (default)**. Truncates older tool outputs, collapses stale env-blocks, and uses write action elision.
+4.  `4`, `aggressive` — Enables stale tool pruning, tighter tool result bounds, and partial substring-deduplication.
+5.  `5`, `extreme` or `squeeze` — Aggressively shrinks everything. Deeply compacts historical turns beyond 8 turns, enables active tool pruning, and drops context down to tight byte limits.
 
-## Token-Cost Optimization Profiles (`GW_PROFILE`)
+### Profile Baselines Matrix
+The following table shows the baseline settings for each profile as implemented in `pkg/pipeline/config.go`:
 
-The gateway provides **5 progressive optimization levels** to compress context windows and maximize cache efficiency. Setting the `GW_PROFILE` environment variable applies a curated set of baseline parameters. Individual `GW_*` environment variables can still be set alongside `GW_PROFILE` to explicitly override parameters.
-
-### Supported Profiles
-
-1. **`passthrough` / `raw` / `1`:** Turns off all prompt modifications. Raw input is sent upstream.
-2. **`gentle` / `conservative` / `2`:** Activates non-destructive optimizations like whitespace normalization and cache alignment.
-3. **`balanced` / `default` / `3` (Default):** Evaluates a balanced baseline of context reduction and protection loops.
-4. **`aggressive` / `4`:** Actively compresses history, collapses environment blocks, and trims read-only tool cycles.
-5. **`extreme` / `squeeze` / `5`:** Maximizes prompt shrinkage with small truncation limits and aggressive active tool pruning.
-
-### Detailed Optimization Parameters
-
-| Parameter / Knob | Standard Default | Fallback Env Alias | Gentle (2) | Balanced (3) | Aggressive (4) | Extreme (5) |
-|---|:---:|---|:---:|:---:|:---:|:---:|
-| `GW_NORMALIZE_WHITESPACE` | `on` | — | `on` | `on` | `on` | `on` |
-| `GW_CACHE_ALIGNER` | `on` | — | `on` | `on` | `on` | `on` |
-| `GW_BREAK_LOOP_TRAP` | `on` | — | `on` | `on` | `on` | `on` |
-| `GW_LOOP_TRAP_NUDGE` | `on` | — | `off` | `on` | `on` | `on` |
-| `GW_COLLAPSE_ENV_BLOCKS` | `on` | — | `on` | `on` | `on` | `on` |
-| `GW_COLLAPSE_ENV_MIN_BYTES` | `256` | `GW_COLLAPSE_ENV_THRESHOLD` | `1024` | `256` | `128` | `64` |
-| `GW_DEDUP_REPLAY` | `on` | — | `on` | `on` | `on` | `on` |
-| `GW_DEDUP_MIN_BYTES` | `512` | `GW_DEDUP_THRESHOLD` | `1024` | `512` | `256` | `128` |
-| `GW_DEDUP_SUBSTRING` | `off` | — | `off` | `off` | `on` | `on` |
-| `GW_DEDUP_SUBSTRING_MIN_BYTES`| `1024` | `GW_DEDUP_SUBSTRING_THRESHOLD`| `1024` | `1024` | `512` | `256` |
-| `GW_TOOL_RESULT_TRUNCATE` | `on` | — | `off` | `on` | `on` | `on` |
-| `GW_TOOL_RESULT_MAX_BYTES` | `8000` | `GW_TOOL_TRUNCATE_LIMIT` | `8000` | `8000` | `4096` | `2048` |
-| `GW_TOOL_RESULT_RETAIN_WINDOW` | `3` | — | `5` | `3` | `2` | `1` |
-| `GW_WRITE_ACTION_ELISION` | `on` | — | `off` | `on` | `on` | `on` |
-| `GW_PRUNE_STALE_TOOLS` | `off` | — | `off` | `off` | `on` | `on` |
-| `GW_DEEP_COMPACT` | `off` | — | `off` | `off` | `on` | `on` |
-| `GW_DEEP_COMPACT_KEEP_TURNS` | `12` | — | `12` | `12` | `12` | `8` |
-| `GW_DEEP_COMPACT_MAX_BYTES` | `500` | — | `500` | `500` | `500` | `250` |
-| `GW_ACTIVE_TOOL_PRUNING` | `off` | — | `off` | `off` | `on` | `on` |
-| `GW_ACTIVE_TOOL_PRUNING_WINDOW`| `20` | — | `20` | `20` | `20` | `10` |
-| `GW_MAX_INPUT_CHARS` | `0` (unlim) | — | `0` | `0` | `0` | `350000` |
+| Stage / Parameter | 1. Pass-Through | 2. Gentle | 3. Balanced (Default) | 4. Aggressive | 5. Extreme Squeeze |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Normalize Whitespace** | Disabled | Enabled | Enabled | Enabled | Enabled |
+| **Cache Aligner** | Disabled | Enabled | Enabled | Enabled | Enabled |
+| **Loop Break Trap** | Disabled | Enabled | Enabled | Enabled | Enabled |
+| **Loop Trap Nudge** | Disabled | Disabled | Enabled | Enabled | Enabled |
+| **Collapse Env Blocks** | Disabled | Enabled | Enabled | Enabled | Enabled |
+| **Collapse Env Min Bytes** | 256 B | 1024 B | 256 B | 128 B | 64 B |
+| **Dedup Replay** | Disabled | Enabled | Enabled | Enabled | Enabled |
+| **Dedup Min Bytes** | 512 B | 1024 B | 512 B | 256 B | 128 B |
+| **Dedup Substring** | Disabled | Disabled | Disabled | Enabled | Enabled |
+| **Dedup Substring Min Bytes**| 1024 B | 1024 B | 1024 B | 512 B | 256 B |
+| **Tool Result Truncate** | Disabled | Disabled | Enabled | Enabled | Enabled |
+| **Tool Result Max Bytes** | 8000 B | 8000 B | 8000 B | 4096 B | 2048 B |
+| **Tool Result Head Bytes** | 2000 B | 2000 B | 2000 B | 2000 B | 1000 B |
+| **Tool Result Tail Bytes** | 1000 B | 1000 B | 1000 B | 1000 B | 500 B |
+| **Tool Result Retain Window**| 0 turns | 5 turns | 3 turns | 2 turns | 1 turn |
+| **Prune Stale Tools** | Disabled | Disabled | Disabled | Enabled | Enabled |
+| **Deep Compact Enabled** | Disabled | Disabled | Disabled | Enabled | Enabled |
+| **Deep Compact Keep Turns** | 12 turns | 12 turns | 12 turns | 12 turns | 8 turns |
+| **Deep Compact Max Bytes** | 500 B | 500 B | 500 B | 500 B | 250 B |
+| **Deep Compact Head Bytes** | 200 B | 200 B | 200 B | 200 B | 100 B |
+| **Deep Compact Tail Bytes** | 100 B | 100 B | 100 B | 100 B | 50 B |
+| **Active Tool Pruning** | Disabled | Disabled | Disabled | Enabled | Enabled |
+| **Active Tool Pruning Window**| 20 turns | 20 turns | 20 turns | 20 turns | 10 turns |
+| **Max Input Chars** | Unset | Unset | Unset | Unset | 350,000 chars |
+| **Write Action Elision** | Disabled | Disabled | Enabled | Enabled | Enabled |
+| **Write Action Retain Window**| 0 turns | 5 turns | 3 turns | 2 turns | 1 turn |
 
 ---
 
-## Live Cost Estimation & Billing Settings
+## ⚙️ Environment Variables Reference
 
-To track costs, the gateway resolves prices directly from the public Google Cloud Billing catalog on startup.
+Individual environment variables can be exported to **override** specific profile baseline settings.
 
-| Variable | Default Value | Purpose / Constraints |
-|---|:---:|---|
-| `GW_PRICING` | `on` | Cost estimation toggle. Set to `off` to disable price catalog scrapes and logs. |
-| `GW_PRICING_CACHE_TTL_SEC` | `21600` (6h) | Interval in seconds to lazily refresh cached pricing rates from Google Billing Catalog. |
-| `GW_PRICING_DEBUG` | `off` | When set to `on`, outputs extremely verbose trace logs during startup SKU resolution. |
+### Server & Bind Configurations
+*   `PORT` — Port for the HTTP server to listen on. Defaults to `11434`.
+*   `BIND_ADDR` — The interface IP to bind. Defaults to `0.0.0.0` (all interfaces). For local development, set to `127.0.0.1` for safety.
+*   `GATEWAY_AUTH_TOKEN` — If set, activates Bearer authentication on all `/api/*` and `/v1/*` endpoints. Requests must include the header `Authorization: Bearer <token>`.
+*   `MAX_REQUEST_MB` — Maximum allowed incoming request body size in Megabytes. Defaults to `100`.
+*   `READ_HEADER_TIMEOUT_SEC` — Timeout limit for reading request headers. Defaults to `10`.
+*   `IDLE_TIMEOUT_SEC` — Connection idle timeout. Defaults to `120`.
+*   `WRITE_TIMEOUT_SEC` — Connection write timeout. Defaults to `0` (disabled) to preserve long-running streams.
+*   `SHUTDOWN_TIMEOUT_SEC` — Timeout margin for graceful server shutdown and active request draining. Defaults to `15`.
 
----
+### GCP Project Parameters
+*   `GOOGLE_CLOUD_PROJECT` — **Required**. Your Google Cloud Platform project ID.
+*   `GOOGLE_CLOUD_LOCATION` — Your target GCP region (e.g. `us-central1` or `europe-west9`). Defaults to `us-central1`.
 
-## Google Search Grounding Settings
+### Prompt Optimization Toggles
+*   `GW_NORMALIZE_WHITESPACE` — Enables stripping of BOMs, carriage returns, trailing space, and multi-line runs.
+*   `GW_CACHE_ALIGNER` — Enables system-prompt prefix cache stabilization by relocating volatile runtime metadata (session IDs, timestamps, working directory) to the system instructions suffix.
+*   `GW_BREAK_LOOP_TRAP` — Enables LLM loop-trap deadlock resolution by deduplicating scoldings and empty turns.
+*   `GW_LOOP_TRAP_NUDGE` — Appends helpful tool-use nudges to user scoldings.
+*   `GW_COLLAPSE_ENV_BLOCKS` — Enables collapsing of stale `<environment_details>` snapshots.
+*   `GW_COLLAPSE_ENV_MIN_BYTES` (alias `GW_COLLAPSE_ENV_THRESHOLD`) — Size threshold for env-block collapsing.
+*   `GW_DEDUP_REPLAY` — Enables multi-turn text and image SHA-256 backward replay deduplication.
+*   `GW_DEDUP_MIN_BYTES` (alias `GW_DEDUP_THRESHOLD`) — Size threshold for block deduplication.
+*   `GW_DEDUP_SUBSTRING` — Enables partial contiguous substring replay deduplication.
+*   `GW_DEDUP_SUBSTRING_MIN_BYTES` (alias `GW_DEDUP_SUBSTRING_THRESHOLD`) — Size threshold for substring deduplication.
+*   `GW_TOOL_RESULT_TRUNCATE` — Enables Dual-Window progressive observation masking on older tool output responses.
+*   `GW_TOOL_RESULT_MAX_BYTES` (alias `GW_TOOL_TRUNCATE_LIMIT`) — Size threshold for tool-result truncation.
+*   `GW_TOOL_RESULT_HEAD_BYTES` — Head bytes kept in truncated tool outputs.
+*   `GW_TOOL_RESULT_TAIL_BYTES` — Tail bytes kept in truncated tool outputs.
+*   `GW_TOOL_RESULT_RETAIN_WINDOW` — Turns to keep completely unelided in both directions from the latest turn.
+*   `GW_PRUNE_STALE_TOOLS` — Enables robust part-level pruning of superseded read-only tool exchanges.
+*   `GW_DEEP_COMPACT` — Enables semantic deep-turn compaction of cold historical turns.
+*   `GW_DEEP_COMPACT_KEEP_TURNS` — Warm turns window size.
+*   `GW_DEEP_COMPACT_MAX_BYTES` — Size threshold for deep compaction.
+*   `GW_DEEP_COMPACT_HEAD_BYTES` — Head bytes preserved on deep-compacted text blocks.
+*   `GW_DEEP_COMPACT_TAIL_BYTES` — Tail bytes preserved on deep-compacted text blocks.
+*   `GW_ACTIVE_TOOL_PRUNING` — Enables dynamic pruning of cold auxiliary tools.
+*   `GW_ACTIVE_TOOL_PRUNING_WINDOW` — Sliding turn window size for monitoring tool activity.
+*   `GW_ACTIVE_TOOL_PRUNING_WHITELIST` — Comma-separated list of immune tools that are never pruned.
+*   `GW_MAX_INPUT_CHARS` — Soft context budget character ceiling. Triggered sliding history trim when exceeded.
+*   `GW_WRITE_ACTION_ELISION` — Enables elision of historical `write_to_file` and `replace_in_file` payload bodies.
+*   `GW_WRITE_ACTION_RETAIN_WINDOW` — Turn window to keep file write parameters completely unelided.
 
-Enables native web-search grounding over Google Search for Gemini models:
+### Image & Media Sizes
+*   `GW_MAX_IMAGE_BYTES_PER_PART` — Max decoded size of a single image part. Defaults to `10485760` (10 MiB).
+*   `GW_MAX_IMAGE_BYTES_PER_REQUEST` — Cumulative decoded size of all images in a request. Defaults to `33554432` (32 MiB).
+*   `GW_MAX_MEDIA_BYTES_PER_PART` — Max decoded size of a single audio/video/PDF part. Defaults to `52428800` (50 MiB).
+*   `GW_MAX_MEDIA_BYTES_PER_REQUEST` — Cumulative decoded size of all media in a request. Defaults to `104857600` (100 MiB).
 
-| Variable | Default Value | Purpose / Constraints |
-|---|:---:|---|
-| `GW_GEMINI_SEARCH_GROUNDING` | _empty_ | Set to `google_search` or `enterprise_web_search` to force search on Gemini queries. |
-| `GW_GEMINI_SEARCH_THRESHOLD` | `-1.0` (disabled) | Dynamic threshold (float, e.g., `0.5`) to trigger search when confidence drops. |
+### Caching Toggles & Cache Directories
+*   `GW_PROMPT_CACHE` — Master toggle for explicit/implicit prompt caching. Defaults to `true`.
+*   `GW_CACHE_DIR` — Custom path for on-disk file caching. Defaults to `os.UserCacheDir()/cline-vertex-gw`.
+*   `GW_FS_CACHE_TTL_SEC` — Staleness window for cached model lists and pricing. Defaults to `86400` (1 day).
+*   `GW_ELIDED_TTL_SEC` — Freshness TTL for elided FSCache files. Defaults to `10800` (3 hours).
+*   `GW_ELIDED_CLEANUP_INTERVAL_SEC` — Background scanner thread interval for pruning stale elided files. Defaults to `600` (10 minutes).
+*   `GW_GEMINI_CACHE_TTL` — In-memory Gemini cached content lease duration. Defaults to `600` (10 minutes).
+*   `GW_GEMINI_CACHE_MIN_BYTES` — Prefix size threshold for minting custom Vertex cached resources. Defaults to `128000`.
 
----
-
-## Administrative Endpoints
-
-The gateway exposes five operator-facing endpoints. These endpoints are **permanently unauthenticated** by design to simplify health probes, deploy automations, and metrics pulling.
-
-| Endpoint | Method | Purpose / Response Shape |
-|---|:---:|---|
-| `/healthz` | `GET` | Return JSON detailing gateway liveness, version, runtime details, and uptime. |
-| `/readyz` | `GET` | Return `200 OK` JSON when Vertex AI client is ready; `503 Service Unavailable` with details otherwise. |
-| `/version` | `GET` | Retrieves the gateway's build version string. |
-| `/metrics` | `GET` | Exposes standard Prometheus text-exposition metrics for log/monitoring aggregators. |
-| `/` | `GET` | Legacy raw plain-text liveness response (`"cline-vertex-gw running..."`). |
-
----
-
-## Build Version Injection
-
-To make version reporting across `/healthz`, `/version`, and metrics meaningful, inject the Git version string at compile time using Go linker flags:
-
-```bash
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-go build -ldflags "-s -w -X main.version=${VERSION}" -o cline-vertex-gw .
-```
-The included `Makefile` and standard container `Dockerfile` run this command automatically.
+### Cost Scraper & Debugs
+*   `GW_PRICING` — Set to `off` to disable all runtime pricing scrapes, cost tracking, and cost estimations. Defaults to `on`.
+*   `GW_PRICING_CACHE_TTL_SEC` — Pricing rate card cache TTL. Defaults to `21600` (6 hours).
+*   `GW_PRICING_DEBUG` — Set to `true` to print dynamic SKU matching, resolution pathways, and final rate cards to logs.
+*   `GW_DUMP_PAYLOADS` — Set to `true` to dump complete request and response JSON payloads to output logs for debugging.
+*   `LOG_LEVEL` — Minimum severity level to print (`debug`, `info`, `warn`, `error`). Defaults to `info`.

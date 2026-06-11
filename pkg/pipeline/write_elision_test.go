@@ -11,9 +11,12 @@ import (
 func withWriteElision(t *testing.T, enabled bool) func() {
 	t.Helper()
 	prev := writeActionElision
+	prevWindow := writeActionRetainWindow
 	writeActionElision = enabled
+	writeActionRetainWindow = 2
 	return func() {
 		writeActionElision = prev
+		writeActionRetainWindow = prevWindow
 	}
 }
 

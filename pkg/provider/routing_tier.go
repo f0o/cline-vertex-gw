@@ -12,6 +12,10 @@ func (rt *routingTierRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	cloned := req.Clone(req.Context())
 	if tier, ok := req.Context().Value(ContextKeyRoutingTier).(string); ok && tier != "" {
 		cloned.Header.Set("X-Vertex-AI-Routing-Tier", tier)
+		if tier == "flex" || tier == "priority" {
+			cloned.Header.Set("X-Vertex-AI-LLM-Request-Type", "shared")
+			cloned.Header.Set("X-Vertex-AI-LLM-Shared-Request-Type", tier)
+		}
 	}
 	underlying := rt.underlying
 	if underlying == nil {

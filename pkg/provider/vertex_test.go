@@ -219,6 +219,12 @@ func TestRoutingTierRoundTripper(t *testing.T) {
 			expectHeader:  true,
 		},
 		{
+			name:          "routing tier flex",
+			tierInCtx:     "flex",
+			wantHeaderVal: "flex",
+			expectHeader:  true,
+		},
+		{
 			name:         "routing tier empty",
 			tierInCtx:    "",
 			expectHeader: false,
@@ -263,13 +269,30 @@ func TestRoutingTierRoundTripper(t *testing.T) {
 			}
 
 			val := capturedHeader.Get("X-Vertex-AI-Routing-Tier")
+			valReqType := capturedHeader.Get("X-Vertex-AI-LLM-Request-Type")
+			valSharedType := capturedHeader.Get("X-Vertex-AI-LLM-Shared-Request-Type")
+
 			if tt.expectHeader {
 				if val != tt.wantHeaderVal {
 					t.Errorf("X-Vertex-AI-Routing-Tier = %q; want %q", val, tt.wantHeaderVal)
 				}
+				if tt.wantHeaderVal == "flex" || tt.wantHeaderVal == "priority" {
+					if valReqType != "shared" {
+						t.Errorf("X-Vertex-AI-LLM-Request-Type = %q; want %q", valReqType, "shared")
+					}
+					if valSharedType != tt.wantHeaderVal {
+						t.Errorf("X-Vertex-AI-LLM-Shared-Request-Type = %q; want %q", valSharedType, tt.wantHeaderVal)
+					}
+				}
 			} else {
 				if val != "" {
 					t.Errorf("expected no X-Vertex-AI-Routing-Tier header, but got %q", val)
+				}
+				if valReqType != "" {
+					t.Errorf("expected no X-Vertex-AI-LLM-Request-Type header, but got %q", valReqType)
+				}
+				if valSharedType != "" {
+					t.Errorf("expected no X-Vertex-AI-LLM-Shared-Request-Type header, but got %q", valSharedType)
 				}
 			}
 		})

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.f0o.dev/cline-vertex-gw/pkg/api"
+	"go.f0o.dev/cline-vertex-gw/pkg/cache"
 	"go.f0o.dev/cline-vertex-gw/pkg/logx"
 	"go.f0o.dev/cline-vertex-gw/pkg/pipeline"
 	"go.f0o.dev/cline-vertex-gw/pkg/provider"
@@ -42,8 +43,10 @@ const (
 	envIdle       = "IDLE_TIMEOUT_SEC"
 	envWrite      = "WRITE_TIMEOUT_SEC" // 0 disables (needed for long streams); default 0
 	envShutdown   = "SHUTDOWN_TIMEOUT_SEC"
-	envLogFormat  = "LOG_FORMAT" // "json" (default) or "text"
-	envLogLevel   = "LOG_LEVEL"  // "debug"|"info"|"warn"|"error"; default "info"
+	envLogFormat             = "LOG_FORMAT" // "json" (default) or "text"
+	envLogLevel              = "LOG_LEVEL"  // "debug"|"info"|"warn"|"error"; default "info"
+	envElidedCleanupInterval = "GW_ELIDED_CLEANUP_INTERVAL_SEC" // optional; default 600 (10 minutes). 0 disables.
+	envElidedTTL             = "GW_ELIDED_TTL_SEC"              // optional; default 10800 (3 hours).
 )
 
 // configureLogging installs a slog handler as the program-wide default and
@@ -198,6 +201,9 @@ func main() {
 	writeTimeout := time.Duration(mustEnvInt(envWrite, 0)) * time.Second
 	shutdownTimeout := time.Duration(mustEnvInt(envShutdown, 30)) * time.Second
 
+	elidedCleanupInterval := time.Duration(mustEnvInt(envElidedCleanupInterval, 600)) * time.Second
+	elidedTTL := time.Duration(mustEnvInt(envElidedTTL, 10800)) * time.Second
+
 	// Root context cancelled on SIGINT/SIGTERM so in-flight upstream calls can
 	// exit promptly via context propagation.
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -229,6 +235,41 @@ func main() {
 		// falls back to live discovery on the first /api/tags poll if this
 		// hasn't completed.
 		go vertexClient.WarmModels(rootCtx)
+	}
+
+	// Start the automated/periodic cleanup of elided files if enabled.
+	if elidedCleanupInterval > 0 {
+		go func() {
+			// Run an initial cleanup shortly after startup (e.g., 5 seconds) to avoid blocking startup
+			// but still clean up any stale files from previous runs.
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				deleted, err := cache.CleanupElidedFiles(elidedTTL)
+				if err != nil {
+					logx.Error("failed to run initial elided files cleanup", "error", err)
+				} else if deleted > 0 {
+					logx.Info("initial cleanup deleted stale elided files", "count", deleted)
+				}
+			}
+
+			ticker := time.NewTicker(elidedCleanupInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-rootCtx.Done():
+					return
+				case <-ticker.C:
+					deleted, err := cache.CleanupElidedFiles(elidedTTL)
+					if err != nil {
+						logx.Error("failed to cleanup elided files", "error", err)
+					} else if deleted > 0 {
+						logx.Info("automated cleanup deleted stale elided files", "count", deleted)
+					}
+				}
+			}
+		}()
 	}
 
 	// Publish the build version so /healthz and structured-log preambles can

@@ -76,11 +76,16 @@ func TruncateToolResults(contents []*genai.Content) []*genai.Content {
 			continue
 		}
 
+		distance := int32(lastIdx - i)
+		if toolResultRetainWindow > 0 && distance < toolResultRetainWindow {
+			out[i] = c
+			continue
+		}
+
 		// Calculate distance to determine if progressive masking should be aggressive.
 		aggressive := false
 		if toolResultRetainWindow > 0 {
-			distance := int32(lastIdx - i)
-			if distance >= toolResultRetainWindow {
+			if distance >= toolResultRetainWindow + 2 {
 				aggressive = true
 			}
 		}

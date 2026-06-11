@@ -1,96 +1,46 @@
-# Tool Calling & Function Translation
+# Native Tool & Function Calling
 
-`cline-vertex-gw` fully bridges the gap between client-side tool calling (function calling) semantics and the unique APIs of Vertex AI's upstream publishers.
-
-When a client request registers a `tools` catalog (or the legacy `functions` array), the gateway automatically compiles the definitions into the exact wire format expected by the selected publisher (Anthropic, Cohere, OpenAI-compatible, or Gemini). When a model returns tool executions, the gateway intercepts and translates them back into standard client shapes on-the-fly.
+The gateway treats tool calling as a first-class citizen. It translates, matches, and aligns tool definitions, calls, and responses across all publishers and interfaces.
 
 ---
 
-## Tool Specification Translations
+## 🔁 Schema Translations
 
-### Inbound Map (Client → Upstream)
+Different publishers accept different schemas for declaring tools. For example, Cohere expects flattened type fields, Google expects standard JSON-Schema format inside its GenAI SDK, and OpenAI has a specific `type: "function"` nesting structure.
 
-| Client Feature | Upstream Mapping | Operational Behavior |
-|---|---|---|
-| `tools` array | `FunctionDeclaration` / `tools` schema | translates parameters, properties, and constraints. For **Cohere**, the nested JSON Schema is automatically flattened into Cohere's flat list of parameter definitions. |
-| `tool_choice` | Upstream calling configs | Maps standard choices (`"auto"`, `"none"`, `"required"`, or a specific object `{type: "function", function: {name: "..."}}`) to the publisher's native configuration parameters (e.g. Gemini `FunctionCallingConfig` or Anthropic `tool_choice`). |
-| Prior Assistant `tool_calls` | Native assistant blocks | Reconstructs and inserts function-call contexts (e.g., Anthropic `tool_use` blocks or Gemini `FunctionCall` parts) when the client submits conversation loops. |
-| Prior User `tool` response | Native execution results | Translates the outputs of executed tools (e.g. `FunctionResponse` or `tool_result` blocks) back to the upstream model. |
-
-### Outbound Map (Upstream → Client)
-
-| Context | Client-Side Wire Shape | Translation Details |
-|---|---|---|
-| **Streaming (`/v1/*`)** | `delta.tool_calls[]` | Tool call arguments are streamed chunk-by-chunk and emitted delta-by-delta as JSON-encoded strings. The gateway tracks assembly internally to support seamless streaming. |
-| **Non-Streaming (`/v1/*`)** | `choices[0].message.tool_calls[]` | Emits fully formed tool-call blocks in standard OpenAI-compatible formats. |
-| **Ollama Surface (`/api/*`)** | `message.tool_calls[]` | Tool calls are fully assembled and flushed on the final **`Done` frame**. Arguments are sent as a structured JSON object (standard Ollama convention) rather than an escaped string. |
-| **Finish Reason Upgrades** | `finish_reason: "tool_calls"` | Upstream models sometimes prematurely report a normal finish reason `"stop"` while submitting tool calls. The gateway dynamically corrects this to `"tool_calls"` or `"tool_use"` to prevent client execution halts. |
+The gateway uses the **Google GenAI SDK's schemas** as its core internal *lingua franca* representation. 
+*   **Inbound**: Inbound tool schemas (like Ollama's `tools` list or OpenAI's `tools` array) are parsed and translated into `[]*genai.Tool` inside `api/tools.go`.
+*   **Outbound**: When dispatching requests, each publisher adapter translates this internal structure into their native wire format (e.g. `cohere_vertex.go` flattens schemas to parameter definitions, while `vertex.go` passes the `genai.Tool` directly).
 
 ---
 
-## Google Gemini 3.5 Thinking Models Alignment
+## 🧪 Outbound Tool Deltas & Finish Reasons
 
-The gateway includes specific alignments to support Gemini 3.5 thinking models:
-- **Thought Signature Support:** Gemini 3.5 models enforce strict positional checks on thoughts and tool-use blocks during history replays. The gateway utilizes a local fallback `skip_thought_signature_validator` to safely reconstruct tool history turns without triggering bad request errors from the upstream API.
-- **Part-by-Part Positional Alignment:** During conversation history reconstruction, `AlignFunctionCallsAndResponses` ensures tool calls and tool results are aligned exactly index-for-index with corresponding text placeholders.
+During active generation, models emit tool calls as stream deltas or final block results. The gateway intercepts these chunks, unescapes characters if required, and formats them back into the standard expected client dialect.
+
+### Finish Reasons Mapping
+Upstream finish sentinels are converted to client-dialect standard values:
+
+| Internal / Upstream Reason | Ollama Finish Reason | OpenAI Finish Reason |
+| :--- | :--- | :--- |
+| `FinishReasonToolCalls` | `stop` | `tool_calls` |
+| `STOP` | `stop` | `stop` |
+| `MAX_TOKENS` | `length` | `length` |
+| `SAFETY` | `content_filter` | `content_filter` |
 
 ---
 
-## Smoke Test Example
+## ⚡ Parallel Tool Execution Support
 
-You can smoke test tool calling against Claude or Gemini using `/v1/chat/completions`:
+Modern developer agents frequently emit multiple tool calls in parallel (for example, Cline might issue three parallel `read_file` calls to scan multiple code blocks in a single turn).
 
-```bash
-curl -sS http://127.0.0.1:11434/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-3-5-sonnet",
-    "stream": false,
-    "tools": [{
-      "type": "function",
-      "function": {
-        "name": "get_weather",
-        "description": "Get current weather for a location",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "location": {"type": "string"}
-          },
-          "required": ["location"]
-        }
-      }
-    }],
-    "messages": [{"role": "user", "content": "Weather in Paris?"}]
-  }'
-```
+*   **Streaming Deltas**: Streaming adapters accumulate parallel tool call JSON segments per-index in real-time, forwarding them as structured deltas down the wire.
+*   **Response Construction**: The OpenAI streaming writer (`openai_stream.go`) emits separate delta frames carrying unique `index` numbers, `id` attributes, and `function.arguments` additions. This keeps parallel execution contexts stable.
 
-*Expected response containing translated tool calls:*
-```json
-{
-  "id": "chatcmpl-...",
-  "object": "chat.completion",
-  "created": 1747737600,
-  "model": "claude-3-5-sonnet",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-         "content": null,
-         "tool_calls": [
-           {
-             "id": "toolu_...",
-             "type": "function",
-             "function": {
-               "name": "get_weather",
-               "arguments": "{\"location\":\"Paris\"}"
-             }
-           }
-         ]
-      },
-      "finish_reason": "tool_calls"
-    }
-  ]
-}
-```
+---
+
+## 🆔 ID-Based Alignments
+
+When clients return execution outputs to the server, they match them against prior calls. However, OpenAI and Anthropic format these exchanges differently than Google Gemini. Gemini expects a strict 400-validated count alignment of function calls and responses.
+
+The gateway's `AlignFunctionCallsAndResponses` stage maps these lists position-by-position, resolving by **cryptographic call ID first**, and falling back to **Name matching** second. If any mismatch occurs, it synthesizes mock placeholders to guarantee that Vertex AI's gateway never throws a `400 INVALID_ARGUMENT` exception.

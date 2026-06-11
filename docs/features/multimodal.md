@@ -1,93 +1,65 @@
-# Multimodal Input Support
+# Multimodal Input Processing
 
-`cline-vertex-gw` provides robust, high-performance multimodal support on both the Ollama (`/api/chat`) and OpenAI (`/v1/chat/completions`) surface handlers.
-
----
-
-## Supported Media Types
-
-The gateway supports an expansive array of mime types across four major categories of media:
-
-| Category | MIME Types | Supported Upstream Publishers |
-|---|---|---|
-| **Images** | `image/png`, `image/jpeg`, `image/webp`, `image/gif` | All publishers (Gemini, Claude, Llama, Pixtral, Qwen, etc.) |
-| **PDF Documents** | `application/pdf` | Google (Gemini) & Anthropic (Claude) |
-| **Audio** | `audio/wav`, `audio/mp3` (mpeg), `audio/flac`, `audio/ogg`, `audio/aac`, `audio/webm`, `audio/mp4`, `audio/m4a`, `audio/opus` | Google (Gemini) |
-| **Video** | `video/mp4`, `video/webm`, `video/quicktime` (mov), `video/mpeg`, `video/x-msvideo` (avi), `video/x-flv`, `video/3gpp`, `video/ogg` | Google (Gemini) |
+The gateway implements comprehensive, high-fidelity multimodal capabilities across both Ollama and OpenAI API interfaces, allowing developer agents to process visual, auditory, textual, and video assets.
 
 ---
 
-## Core Media Systems
+## 🖼️ Supported Media Formats & Sniffer
 
-### 1. Magic-Bytes Sniffing (`sniffMediaMIME`)
-On the Ollama surface, clients send files inside a flat `images` array containing base64-encoded strings, without providing explicit MIME types. 
+The gateway features a robust magic-bytes sniffer (`sniffMediaMIME`) that automatically detects media MIME-types on the raw binary chunks submitted by Ollama clients (which typically lack explicit MIME-type labels on their native `images` string slice).
 
-To determine how to translate these parts, the gateway employs an internal **magic-bytes sniffer** (`sniffMediaMIME`). It parses the first few bytes of the decoded file header to accurately resolve standard formats (including PNG, JPEG, GIF, WebP, PDF, WAV, MP3, MP4, FLAC, Ogg, and AVI).
+### Supported Formats & MIME Mapping
+*   **Images**: PNG (`image/png`), JPEG (`image/jpeg`), WEBP (`image/webp`), GIF (`image/gif`).
+*   **Audio**: WAV (`audio/wav`), MP3 (`audio/mp3`), FLAC (`audio/flac`), Ogg (`audio/ogg`), AAC (`audio/aac`), Opus (`audio/opus`), M4A (`audio/m4a`).
+*   **Video**: MP4 (`video/mp4`), WebM (`video/webm`), MOV (`video/mov`), MPEG (`video/mpeg`), AVI (`video/avi`), FLV (`video/flv`), 3GPP (`video/3gpp`).
+*   **Text Documents**: PDF (`application/pdf`).
 
-### 2. Upstream Capability Validation (`publisherSupportsMIME`)
-Different model publishers hosted on Vertex AI have varying native restrictions on multimodal inputs (e.g. Gemini supports everything; Claude supports images and PDFs; Meta/Mistral/Qwen support images only).
+---
 
-To prevent confusing, mid-stream failures, the gateway validates request attachments at the gate using `publisherSupportsMIME`. Sending an unsupported file type to a model (e.g., a PDF to a text-only Llama model) returns a clean, parseable `400 Bad Request` explaining exactly what is wrong and recommending alternative model families:
+## 🚫 Publisher Gating Matrix
+
+Different foundation models on Vertex AI have varying physical capability limits (for example, Meta Llama models support vision only, while Google Gemini supports audio, video, documents, and images). 
+
+The gateway enforces **Upstream Gating** under the helper `publisherSupportsMIME` to validate requests *before* initiating network connections:
+
+| Publisher Namespace | Images | Audio | Video | PDF Documents |
+| :--- | :---: | :---: | :---: | :---: |
+| `google` (Gemini) | **Yes** | **Yes** | **Yes** | **Yes** |
+| `anthropic` (Claude) | **Yes** | No | No | **Yes** |
+| `meta` (Llama) | **Yes** (Only `*vision*`) | No | No | No |
+| `mistralai` (Pixtral) | **Yes** | No | No | No |
+| `qwen` (Qwen-VL) | **Yes** | No | No | No |
+| `nvidia` | **Yes** | No | No | No |
+| *Others* (DeepSeek, etc.) | No | No | No | No |
+
+If an unsupported asset format is passed to a model, the gateway immediately aborts the stream and returns a descriptive `400 Bad Request` explaining exactly which model you should select instead.
+
+---
+
+## 📑 Claude Document Block Mapping
+
+While Google Gemini accepts PDFs directly as inline data blobs within standard message turns, Anthropic's Messages API uses a distinct `document` block structure for PDF processing.
+
+The gateway's Anthropic adapter automatically intercepts `application/pdf` inline data parts and transforms them into native Claude messages:
 
 ```json
 {
-  "error": {
-    "message": "model \"llama-3.3-70b-instruct-maas\" (publisher=\"meta\") does not support image inputs on Vertex AI; use a vision-capable model instead — e.g. gemini-2.0-flash, claude-3-5-sonnet, llama-3.2-90b-vision-instruct-maas, or pixtral-12b",
-    "type": "invalid_request_error",
-    "code": "model"
+  "type": "document",
+  "source": {
+    "type": "base64",
+    "media_type": "application/pdf",
+    "data": "[Base64 Payload]"
   }
 }
 ```
 
-### 3. Native Anthropic PDF Translation
-Anthropic Claude models support PDF documents natively. However, they expect PDF attachments to be structured as specific inline `document` blocks. The gateway automatically translates PDF inputs into Claude's native `document` blocks when routing requests to Claude on Vertex.
-
-### 4. Polymorphic `input_audio` Support
-For advanced OpenAI clients, the gateway fully supports the standard, polymorphic `input_audio` schema (with custom `format` and `data` strings), automatically converting them into standard Vertex AI audio inline data parts.
-
 ---
 
-## Image Deduplication (`dedup`)
+## 🛡️ Decoupled Size Guards
 
-Because agent environments like Cline take screenshots on every single turn, a long conversation often carries near-identical, massive image files across dozens of turns, leading to exponential cost and performance degradation.
+To prevent memory bloat or Server Side Request Forgery (SSRF) denial-of-service, the gateway implements strict decoupled byte ceilings. It validates the size of decoded media payloads prior to running upstream connections:
 
-To mitigate this, `cline-vertex-gw` implements an automated **Image Deduplication** optimizer:
-- The gateway hashes incoming image bytes (SHA-256 scoped by role and MIME type).
-- Subsequent identical images are replaced with a lightweight text-part placeholder pointing backward to the turn where the image was first introduced.
-- This ensures that sending the same 800 KB screenshot 5 times across a session uploads ~800 KB of data instead of 4 MB, dramatically reducing upload bandwidth and latencies.
-
----
-
-## Limits & Safety Constraints
-
-- **SSRF Mitigation:** The gateway only accepts inline, base64-encoded data strings. It **never** makes outbound HTTP/HTTPS requests to fetch user-supplied URLs. This prevents Server-Side Request Forgery (SSRF) vulnerabilities entirely.
-- **Size Caps:** To protect gateway and model performance, per-media size limits are enforced on decoded file bytes:
-  - `GW_MAX_MEDIA_BYTES_PER_PART` (default: 10 MiB) — Max size of any single file.
-  - `GW_MAX_MEDIA_BYTES_PER_REQUEST` (default: 32 MiB) — Max aggregate size of all media in a single request.
-- **Context Filtering:** Media attached to `system`, `developer`, or `tool` messages are silently filtered out since no upstream publishers support them.
-- **Surface Gating:** The single-turn `/api/generate` endpoint does not support multimodal inputs. Use `/api/chat` or `/v1/chat/completions` for multimodal tasks.
-
----
-
-## Smoke Test Example
-
-You can smoke test the gateway's vision capability against Gemini using `curl`:
-
-```bash
-IMG_B64=$(base64 -w0 < screenshot.png)
-
-curl -sS http://127.0.0.1:11434/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"gemini-2.0-flash\",
-    \"stream\": false,
-    \"messages\": [{
-      \"role\": \"user\",
-      \"content\": [
-        {\"type\": \"text\", \"text\": \"describe this image in one sentence\"},
-        {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,${IMG_B64}\"}}
-      ]
-    }]
-  }"
-```
+*   **Single Image Part**: Configured via `GW_MAX_IMAGE_BYTES_PER_PART` (default `10 MiB`).
+*   **Cumulative Image Request**: Configured via `GW_MAX_IMAGE_BYTES_PER_REQUEST` (default `32 MiB`).
+*   **Single Media Part (Audio/Video/PDF)**: Configured via `GW_MAX_MEDIA_BYTES_PER_PART` (default `50 MiB`).
+*   **Cumulative Media Request**: Configured via `GW_MAX_MEDIA_BYTES_PER_REQUEST` (default `100 MiB`).
